@@ -1,4 +1,4 @@
-const CACHE_NAME = 'simplitex-v3';
+const CACHE_NAME = 'simplitex-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const ASSETS = [
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
+  './mod-order.js
 ];
 
 self.addEventListener('install', (e) => {
