@@ -6,10 +6,10 @@ const ASSETS = [
   './db.js',
   './app.js',
   './mod-inward.js',
+  './mod-order.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
-  './mod-order.js
 ];
 
 self.addEventListener('install', (e) => {
