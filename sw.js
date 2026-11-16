@@ -1,10 +1,11 @@
-const CACHE_NAME = 'simplitex-v1';
+const CACHE_NAME = 'simplitex-v2';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
   './db.js',
   './app.js',
+  './mod-inward.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
