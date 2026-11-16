@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SimpliTex - Saree Wholesale ERP</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icon-192.png" />
+  <meta name="theme-color" content="#0b0d12" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+
+  <!-- Monthly Subscription Lock / Login Overlay -->
+  <div id="lockScreen" class="overlay hidden">
+    <div class="lock-box">
+      <img src="./icon-192.png" alt="SimpliTex" />
+      <h2 id="lockTitle" style="margin:4px 0;">SimpliTex Locked</h2>
+      <p id="lockMsg" style="font-size:13px; color:#6b7280;"></p>
+      <div style="background:#f3f4f6; padding:10px; border-radius:8px; margin:12px 0;">
+        <small style="color:#6b7280;">Device ID (Admin ko bhejein):</small>
+        <div id="showDeviceId" style="font-weight:800; font-size:16px; letter-spacing:1px;"></div>
+      </div>
+      <input type="text" id="unlockCodeInput" placeholder="Unlock Code (e.g. 20261231-XXXXXX)" style="text-align:center; margin-bottom:10px;" />
+      <button class="btn btn-dark" style="width:100%;" onclick="applyUnlockCode()">Unlock App</button>
+    </div>
+  </div>
+
+  <!-- PIN Login Screen (LocalStorage Chhota Auth) -->
+  <div id="pinScreen" class="overlay hidden">
+    <div class="lock-box">
+      <img src="./icon-192.png" alt="SimpliTex" />
+      <h2 style="margin:4px 0;">SimpliTex Login</h2>
+      <p id="pinHint" style="font-size:13px; color:#6b7280;"></p>
+      <input type="text" id="loginUser" placeholder="Username / Malik Name" style="margin-bottom:8px;" />
+      <input type="password" id="loginPin" placeholder="4-Digit PIN" maxlength="8" style="margin-bottom:12px;" />
+      <button class="btn btn-dark" style="width:100%;" onclick="handlePinLogin()">Enter App</button>
+    </div>
+  </div>
+
+  <!-- Top Header -->
+  <header class="topbar">
+    <div class="brand">
+      <img src="./icon-192.png" alt="S" />
+      <div>
+        <h1>SimpliTex</h1>
+        <small id="activeFirmLabel">Saree Management</small>
+      </div>
+    </div>
+    <div>
+      <span id="netStatus" class="status-pill">Offline Ready</span>
+      <span id="expiryPill" class="status-pill" style="margin-left:4px;"></span>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="nav-bar" id="mainNav">
+    <button class="nav-btn active" onclick="openTab('tab-dash', this)">Dashboard</button>
+    <button class="nav-btn" onclick="openTab('tab-jobwork', this)">1. Job Work Out</button>
+    <button class="nav-btn" onclick="openTab('tab-inward', this)">2. Stock Inward</button>
+    <button class="nav-btn" onclick="openTab('tab-order', this)">3. Order Form</button>
+    <button class="nav-btn" onclick="openTab('tab-barcode', this)">4. Barcoding</button>
+    <button class="nav-btn" onclick="openTab('tab-challan', this)">5. Challan & Slip</button>
+    <button class="nav-btn" onclick="openTab('tab-settings', this)">⚙️ Settings</button>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="container">
+
+    <!-- DASHBOARD -->
+    <section id="tab-dash" class="tab-sec">
+      <div class="dash-grid">
+        <div class="tile" onclick="openTabByName('tab-inward')">
+          <div class="num" id="statBunkarStock">0</div>
+          <div class="lbl">Bunkar Stock (Pcs)</div>
+        </div>
+        <div class="tile" onclick="openTabByName('tab-jobwork')">
+          <div class="num" id="statPendingJW">0</div>
+          <div class="lbl">Job Work Pending</div>
+        </div>
+        <div class="tile" onclick="openTabByName('tab-barcode')">
+          <div class="num" id="statReadyStock">0</div>
+          <div class="lbl">Ready Barcoded Pcs</div>
+        </div>
+        <div class="tile" onclick="openTabByName('tab-challan')">
+          <div class="num" id="statChallans">0</div>
+          <div class="lbl">Total Challans</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <h2>SimpliTex Ready Hai! 🚀</h2>
+        <p style="font-size:14px; color:#4b5563; line-height:1.5;">
+          Pehle <b>⚙️ Settings</b> me ja kar apni <b>Firms</b> add karein (jaise <b>Kamran Traders - KT</b> aur <b>Indian Fabrics - IF</b>).<br/>
+          Agle steps me hum Module 1 se 6 tak ek-ek karke saare forms isme jodenge!
+        </p>
+      </div>
+    </section>
+
+    <!-- Placeholders for Modules 1 to 5/6 (Agle steps me bharenge) -->
+    <section id="tab-jobwork" class="tab-sec hidden"><div class="card"><h2>1. Job Work Outward</h2><p>Step 2 me code aayega...</p></div></section>
+    <section id="tab-inward" class="tab-sec hidden"><div class="card"><h2>2. Stock Inward</h2><p>Step 2 me code aayega...</p></div></section>
+    <section id="tab-order" class="tab-sec hidden"><div class="card"><h2>3. Order Form</h2><p>Step 3 me code aayega...</p></div></section>
+    <section id="tab-barcode" class="tab-sec hidden"><div class="card"><h2>4. Barcoding</h2><p>Step 4 me code aayega...</p></div></section>
+    <section id="tab-challan" class="tab-sec hidden"><div class="card"><h2>5. Challan & Packing Slip</h2><p>Step 5 me code aayega...</p></div></section>
+
+    <!-- SETTINGS (Multi-Firm + Backup + License Info) -->
+    <section id="tab-settings" class="tab-sec hidden">
+      <div class="card">
+        <h2>Apni Firm Add Karein (Dynamic Header & Barcode Code)</h2>
+        <div class="grid-2">
+          <div><label>Firm Name *</label><input id="firmName" placeholder="e.g. Kamran Traders" /></div>
+          <div><label>Short Code * (Barcode ke liye)</label><input id="firmCode" placeholder="e.g. KT ya IF" maxlength="6" /></div>
+          <div><label>Mobile No.</label><input id="firmPhone" placeholder="9839xxxxxx" /></div>
+          <div><label>GSTIN (Optional)</label><input id="firmGst" placeholder="09AAFF..." /></div>
+        </div>
+        <div style="margin-top:10px;"><label>Address</label><input id="firmAddress" placeholder="Sadar Chowk, Mau (U.P.)" /></div>
+        <button class="btn btn-dark" style="margin-top:12px;" onclick="saveFirm()">+ Save Firm</button>
+
+        <table>
+          <thead><tr><th>Firm Name</th><th>Code</th><th>Mobile</th><th>Action</th></tr></thead>
+          <tbody id="firmTableBody"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Data Backup & Restore (Safe Storage)</h2>
+        <p style="font-size:13px; color:#6b7280;">Roz shaam ko 1 click me backup download kar ke rakhein.</p>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn btn-success" onclick="downloadBackup()">⬇️ Download Backup (.json)</button>
+          <label class="btn btn-dark" style="margin:0; display:inline-block; cursor:pointer;">
+            ⬆️ Restore Backup
+            <input type="file" accept=".json" style="display:none;" onchange="handleRestore(this)" />
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Subscription & Device Info</h2>
+        <p style="font-size:13px;">Device ID: <b id="settingsDeviceId"></b> | Valid Till: <b id="settingsExpiry"></b></p>
+        <button class="btn btn-danger btn-sm" onclick="logoutPin()">Lock / Logout PIN</button>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="./db.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
