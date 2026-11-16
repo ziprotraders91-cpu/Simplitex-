@@ -1,4 +1,7 @@
-// === SimpliTex Module 1 (Job Work Outward) & Module 2 (Stock Inward) ===
+// === SimpliTex Module 1 (Job Work Outward - Batch) & Module 2 (Stock Inward - Simple) ===
+
+let jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [] };
+let inState = { step: 'MENU', jwType: '', worker: null };
 
 function esc(str) {
   return String(str || '').replace(/[&<>"']/g, (m) => ({
@@ -8,468 +11,488 @@ function esc(str) {
 
 function todayISO() {
   const d = new Date();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${m}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function renderInwardAndJobWorkHTML() {
-  // === MODULE 2: STOCK INWARD ===
-  document.getElementById('tab-inward').innerHTML = `
-    <div class="card">
-      <h2>2. Stock Inward (Dukan Me Saree Aana)</h2>
+// Tab khulte hi clean Step 1 dikhana
+window.onTabChanged = function (tabId) {
+  if (tabId === 'tab-jobwork') {
+    jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [] };
+    renderJWOutward();
+  } else if (tabId === 'tab-inward') {
+    inState = { step: 'MENU', jwType: '', worker: null };
+    renderStockInward();
+  }
+};
 
-      <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
-        <button type="button" id="btnInDirect" class="btn btn-dark" onclick="setInwardMode('DIRECT')">
-          🏠 Direct Baithak se Aayi
-        </button>
-        <button type="button" id="btnInJW" class="btn" style="background:#e5e7eb; color:#111;" onclick="setInwardMode('JOBWORK')">
-          🧵 Job Work se Wapas Aayi
-        </button>
+// Tally-style Esc Key (1 Step Peeche)
+window.handleModuleEscape = function () {
+  const sec = document.querySelector('.tab-sec:not(.hidden)');
+  if (!sec) return false;
+
+  if (sec.id === 'tab-jobwork') {
+    if (jwState.step === 'BATCH') { jwState.step = 'WORKER'; jwState.worker = null; renderJWOutward(); return true; }
+    if (jwState.step === 'WORKER') { jwState.step = 'TYPE'; jwState.jwType = ''; renderJWOutward(); return true; }
+  }
+  if (sec.id === 'tab-inward') {
+    if (inState.step === 'JW_RETURN') { inState.step = 'JW_WORKER'; inState.worker = null; renderStockInward(); return true; }
+    if (inState.step === 'JW_WORKER') { inState.step = 'JW_TYPE'; inState.jwType = ''; renderStockInward(); return true; }
+    if (inState.step === 'DIRECT' || inState.step === 'JW_TYPE') { inState.step = 'MENU'; renderStockInward(); return true; }
+  }
+  return false;
+};
+
+// ==========================================
+// MODULE 1: JOB WORK OUTWARD (3-Step Batch)
+// ==========================================
+async function renderJWOutward() {
+  await openDB();
+  const box = document.getElementById('tab-jobwork');
+
+  // STEP 1: JOB WORK TYPE CHUNEIN
+  if (jwState.step === 'TYPE') {
+    const types = await dbGetAll('jobWorkTypes');
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>1. Job Work Outward — Kaam Chunein</h2>
+          <button class="btn btn-dark btn-sm" onclick="addJobWorkTypePrompt('out')">+ Naya Job Work</button>
+        </div>
+        <div class="list-menu kbd-list">
+          ${types.map((t, i) => `
+            <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}"
+                 onclick="pickOutJWType('${esc(t.name)}')">
+              <span>${i + 1}. ${esc(t.name)}</span>
+              <span class="badge">Enter →</span>
+            </div>
+          `).join('')}
+        </div>
       </div>
+    `;
+    return;
+  }
 
-      <input type="hidden" id="inwardMode" value="DIRECT" />
+  // STEP 2: US KAAM KE WORKERS KI LIST
+  if (jwState.step === 'WORKER') {
+    const allWorkers = await dbGetAll('jobWorkers');
+    const workers = allWorkers.filter((w) => !w.jobWorkType || w.jobWorkType.toUpperCase() === jwState.jwType.toUpperCase());
+    const pendList = await dbGetAll('jobWorkPending');
 
-      <!-- Job Work Details (Sirf jab Job Work se Wapas aaye) -->
-      <div id="inwardJWBox" class="hidden" style="background:#f9fafb; border:1px solid #dce1ea; padding:12px; border-radius:10px; margin-bottom:12px;">
-        <div class="grid-2">
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>${esc(jwState.jwType)} — Worker Chunein</h2>
           <div>
-            <label>Job Work Type *</label>
-            <div style="display:flex; gap:6px;">
-              <select id="inJWType"></select>
-              <button type="button" class="btn btn-dark btn-sm" onclick="addNewJobWorkType()">+ Add</button>
+            <button class="btn btn-success btn-sm" onclick="showAddWorkerModal('out')">+ Naya Worker</button>
+            <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+          </div>
+        </div>
+        <div id="addWorkerInlineOut" class="hidden" style="background:#f9fafb; border:1px solid #d1d5db; padding:12px; border-radius:8px; margin-bottom:12px;">
+          <div class="grid-2">
+            <div><label>Worker Naam *</label><input id="newWNameOut" placeholder="e.g. Raju Calender" /></div>
+            <div><label>Mobile No.</label><input id="newWPhoneOut" type="tel" placeholder="9839xxxxxx" /></div>
+          </div>
+          <div style="margin-top:8px;"><label>Address</label><input id="newWAddrOut" placeholder="Mau" /></div>
+          <button class="btn btn-dark btn-sm" style="margin-top:8px;" onclick="saveNewWorker('out')">Save Worker</button>
+        </div>
+        <div class="list-menu kbd-list">
+          ${workers.length ? workers.map((w, i) => {
+            const p = pendList.find((x) => x.id === `${w.name}__${jwState.jwType.toUpperCase()}`);
+            const pQty = p ? p.qty : 0;
+            return `
+              <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}" onclick="pickOutWorker(${w.id})">
+                <span>${i + 1}. ${esc(w.name)} <small style="color:#6b7280;">${esc(w.phone || '')}</small></span>
+                <span class="badge">Pending: ${pQty} Pcs</span>
+              </div>
+            `;
+          }).join('') : '<p style="color:#6b7280; font-size:13px;">Abhi koi worker nahi hai. Upar "+ Naya Worker" dabaa kar jodein.</p>'}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  // STEP 3: BATCH FORM (200-500 Pcs Ek Saath)
+  if (jwState.step === 'BATCH') {
+    const stocks = (await dbGetAll('bunkarStock')).filter((s) => s.qty > 0);
+    const totalBatch = jwState.batchRows.reduce((s, r) => s + r.qty, 0);
+
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>${esc(jwState.jwType)} → ${esc(jwState.worker.name)} (Batch Entry)</h2>
+          <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+        </div>
+
+        <div class="grid-2" style="margin-bottom:12px;">
+          <div><label>Date</label><input type="date" id="batchDate" value="${todayISO()}" /></div>
+          <div><label>Note / Kaam Detail (Optional)</label><input id="batchNote" placeholder="e.g. Heavy finish" /></div>
+        </div>
+
+        <!-- Keyboard Fast Entry Row -->
+        <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:10px; border-radius:8px; margin-bottom:10px;">
+          <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:6px;">
+            Batch Me Saree Jodein (Bunkar chunein → Qty likh kar Enter dabayein):
+          </div>
+          <div class="grid-2">
+            <div>
+              <label>Saree (Bunkar Stock)</label>
+              <input id="batchBunkarInput" list="batchBunkarList" placeholder="Bunkar naam likhein (e.g. FARHAN)" />
+              <datalist id="batchBunkarList">
+                ${stocks.map((s) => `<option value="${esc(s.bunkarName)}">${esc(s.bunkarName === JW_POOL_KEY ? 'JOB WORK POOL' : s.bunkarName)} (${s.qty} Pcs)</option>`).join('')}
+              </datalist>
+            </div>
+            <div>
+              <label>Qty (Pcs) — Enter se Add hoga</label>
+              <input type="number" id="batchQtyInput" min="1" placeholder="e.g. 10" data-custom-enter="1"
+                     onkeydown="if(event.key==='Enter'){ event.preventDefault(); addBatchRow(); }" />
             </div>
           </div>
-          <div>
-            <label>Saved Job Worker Chunein (Auto-Fill)</label>
-            <select id="inWorkerSelect" onchange="onSelectWorker('in')">
-              <option value="">-- Naya Job Worker --</option>
-            </select>
-          </div>
+          <button type="button" class="btn btn-dark btn-sm" style="margin-top:8px;" onclick="addBatchRow()">+ Add Line</button>
         </div>
 
-        <div class="grid-2" style="margin-top:10px;">
-          <div><label>Job Worker ka Naam *</label><input id="inWorkerName" placeholder="e.g. Raju Embroidery" /></div>
-          <div><label>Mobile No.</label><input id="inWorkerPhone" type="tel" placeholder="9839xxxxxx" /></div>
-        </div>
-        <div style="margin-top:10px;">
-          <label>Address</label>
-          <input id="inWorkerAddr" placeholder="e.g. Mirza Hadi Pura, Mau" />
-        </div>
-        <div id="inWorkerPendingHint" style="margin-top:8px; font-size:12px; color:#1d4ed8;"></div>
-      </div>
-
-      <!-- Common Fields (Bunkar Saree, Qty, Date) -->
-      <div class="grid-2">
-        <div>
-          <label>Date *</label>
-          <input type="date" id="inDate" value="${todayISO()}" />
-        </div>
-        <div>
-          <label>Saree Name (Bunkar / Weaver ka Naam) *</label>
-          <input id="inBunkarName" list="bunkarDatalist" placeholder="e.g. FARHAN, IMRAN" />
-          <datalist id="bunkarDatalist"></datalist>
-        </div>
-        <div>
-          <label>Quantity (Pcs) *</label>
-          <input type="number" id="inQty" min="1" placeholder="e.g. 10" />
-        </div>
-        <div>
-          <label>Note / Remarks (Optional)</label>
-          <input id="inNote" placeholder="e.g. Kora maal / Finishing ok" />
-        </div>
-      </div>
-
-      <button type="button" class="btn btn-success" style="margin-top:14px; width:100%;" onclick="saveStockInward()">
-        ✅ Stock Inward Save Karein (Dukan Stock +)
-      </button>
-    </div>
-
-    <div class="card">
-      <h2>Dukan ka Live Bunkar Stock (Available)</h2>
-      <table>
-        <thead><tr><th>Saree (Bunkar Naam)</th><th>Dukan Stock (Pcs)</th></tr></thead>
-        <tbody id="bunkarStockTable"></tbody>
-      </table>
-    </div>
-
-    <div class="card">
-      <h2>Recent Stock Inward Entries (Last 20)</h2>
-      <div style="overflow-x:auto;">
         <table>
-          <thead><tr><th>Date</th><th>Source / Worker</th><th>Mob No.</th><th>Saree (Bunkar)</th><th>Pcs</th></tr></thead>
-          <tbody id="inwardHistoryTable"></tbody>
+          <thead><tr><th>#</th><th>Saree (Bunkar)</th><th>Pcs</th><th>Hataein</th></tr></thead>
+          <tbody>
+            ${jwState.batchRows.map((r, i) => `
+              <tr>
+                <td>${i + 1}</td>
+                <td><b>${esc(r.bunkarName === JW_POOL_KEY ? 'JOB WORK POOL' : r.bunkarName)}</b></td>
+                <td><b>${r.qty}</b></td>
+                <td><button class="btn btn-danger btn-sm" onclick="removeBatchRow(${i})">X</button></td>
+              </tr>
+            `).join('') || '<tr><td colspan="4" style="color:#6b7280;">Abhi batch khali hai... upar se saree add karein</td></tr>'}
+          </tbody>
         </table>
-      </div>
-    </div>
-  `;
 
-  // === MODULE 1: JOB WORK OUTWARD ===
-  document.getElementById('tab-jobwork').innerHTML = `
-    <div class="card">
-      <h2>1. Job Work Outward (Dukan se Job Work pe Bhejna)</h2>
-      <p style="font-size:12px; color:#6b7280; margin-top:-6px;">
-        Sirf dukan ke available Bunkar stock me se hi saree job work pe jayegi.
-      </p>
-
-      <div class="grid-2">
-        <div>
-          <label>Date *</label>
-          <input type="date" id="outDate" value="${todayISO()}" />
-        </div>
-        <div>
-          <label>Job Work Type *</label>
-          <div style="display:flex; gap:6px;">
-            <select id="outJWType"></select>
-            <button type="button" class="btn btn-dark btn-sm" onclick="addNewJobWorkType()">+ Add</button>
-          </div>
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-top:14px;">
+          <div style="font-size:18px; font-weight:800;">Total Batch: <span style="color:#1d4ed8;">${totalBatch} Pcs</span></div>
+          <button type="button" class="btn btn-success primary-save-btn" onclick="saveBatchOutward()">
+            ✅ Save Batch (Ctrl+S)
+          </button>
         </div>
       </div>
-
-      <div style="background:#f9fafb; border:1px solid #dce1ea; padding:12px; border-radius:10px; margin:12px 0;">
-        <div class="grid-2">
-          <div>
-            <label>Saved Job Worker Chunein</label>
-            <select id="outWorkerSelect" onchange="onSelectWorker('out')">
-              <option value="">-- Naya Job Worker --</option>
-            </select>
-          </div>
-          <div><label>Job Worker ka Naam *</label><input id="outWorkerName" placeholder="e.g. Raju Embroidery" /></div>
-          <div><label>Mobile No.</label><input id="outWorkerPhone" type="tel" placeholder="9839xxxxxx" /></div>
-          <div><label>Address</label><input id="outWorkerAddr" placeholder="e.g. Mau" /></div>
-        </div>
-      </div>
-
-      <div class="grid-2">
-        <div>
-          <label>Saree Chunein (Bunkar Stock se) *</label>
-          <select id="outBunkarSelect"></select>
-        </div>
-        <div>
-          <label>Quantity (Pcs) *</label>
-          <input type="number" id="outQty" min="1" placeholder="Kitni saree bhejni hai" />
-        </div>
-      </div>
-      <div style="margin-top:10px;">
-        <label>Note / Design Instruction (Optional)</label>
-        <input id="outNote" placeholder="e.g. Heavy border work / 3.60 cm jhalar" />
-      </div>
-
-      <button type="button" class="btn btn-dark" style="margin-top:14px; width:100%;" onclick="saveJobWorkOutward()">
-        📤 Job Work pe Bhejein (Dukan Stock -)
-      </button>
-    </div>
-
-    <div class="card">
-      <h2>Job Work Pending Report (Kis Karigar ke Paas Kitni Saree Hai)</h2>
-      <div style="overflow-x:auto;">
-        <table>
-          <thead><tr><th>Job Worker</th><th>Kaam</th><th>Saree (Bunkar)</th><th>Pending Pcs</th><th>Action</th></tr></thead>
-          <tbody id="jwPendingTable"></tbody>
-        </table>
-      </div>
-    </div>
-  `;
+    `;
+    setTimeout(() => document.getElementById('batchBunkarInput')?.focus(), 50);
+  }
 }
 
-// Mode Switch (Direct vs Job Work Return)
-function setInwardMode(mode) {
-  document.getElementById('inwardMode').value = mode;
-  const isJW = mode === 'JOBWORK';
-  document.getElementById('inwardJWBox').classList.toggle('hidden', !isJW);
-
-  const bDir = document.getElementById('btnInDirect');
-  const bJW = document.getElementById('btnInJW');
-  bDir.style.background = isJW ? '#e5e7eb' : '#0b0d12';
-  bDir.style.color = isJW ? '#111' : '#fff';
-  bJW.style.background = isJW ? '#0b0d12' : '#e5e7eb';
-  bJW.style.color = isJW ? '#fff' : '#111';
+function pickOutJWType(name) { jwState.jwType = name; jwState.step = 'WORKER'; renderJWOutward(); }
+async function pickOutWorker(id) {
+  jwState.worker = await dbGet('jobWorkers', id);
+  jwState.batchRows = [];
+  jwState.step = 'BATCH';
+  renderJWOutward();
 }
 
-// Naya Job Work Type Add Karna (Embroidery, Calender, Jhalar, Swarovski + New)
-async function addNewJobWorkType() {
-  const name = prompt('Naye Job Work ka naam likhein (e.g. Dying, Stone, Cutting):');
+function showAddWorkerModal(mode) {
+  const el = document.getElementById(mode === 'out' ? 'addWorkerInlineOut' : 'addWorkerInlineIn');
+  el.classList.toggle('hidden');
+  const inp = document.getElementById(mode === 'out' ? 'newWNameOut' : 'newWNameIn');
+  if (!el.classList.contains('hidden')) inp.focus();
+}
+
+async function saveNewWorker(mode) {
+  const pfx = mode === 'out' ? 'Out' : 'In';
+  const name = document.getElementById('newWName' + pfx).value.trim().toUpperCase();
+  const phone = document.getElementById('newWPhone' + pfx).value.trim();
+  const address = document.getElementById('newWAddr' + pfx).value.trim();
+  const jwType = mode === 'out' ? jwState.jwType : inState.jwType;
+  if (!name) return alert('Worker ka naam zaroori hai!');
+  await dbPut('jobWorkers', { name, phone, address, jobWorkType: jwType.toUpperCase() });
+  mode === 'out' ? renderJWOutward() : renderStockInward();
+}
+
+async function addJobWorkTypePrompt(mode) {
+  const name = prompt('Naye Job Work ka naam likhein (e.g. Dying, Cutting, Stone):');
   if (!name || !name.trim()) return;
-  const clean = name.trim();
-  await dbPut('jobWorkTypes', { name: clean });
-  await refreshStockUI();
-  document.getElementById('inJWType').value = clean;
-  document.getElementById('outJWType').value = clean;
+  await dbPut('jobWorkTypes', { name: name.trim() });
+  mode === 'out' ? renderJWOutward() : renderStockInward();
 }
 
-// Saved Job Worker Select karne par Mobile & Address Auto-Fill
-async function onSelectWorker(prefix) {
-  const val = document.getElementById(prefix + 'WorkerSelect').value;
-  if (!val) {
-    document.getElementById(prefix + 'WorkerName').value = '';
-    document.getElementById(prefix + 'WorkerPhone').value = '';
-    document.getElementById(prefix + 'WorkerAddr').value = '';
-    if (prefix === 'in') document.getElementById('inWorkerPendingHint').innerHTML = '';
+async function addBatchRow() {
+  const bInput = document.getElementById('batchBunkarInput');
+  const qInput = document.getElementById('batchQtyInput');
+  const bunkarName = bInput.value.trim().toUpperCase();
+  const qty = parseInt(qInput.value, 10);
+
+  if (!bunkarName) { bInput.focus(); return alert('Bunkar ka naam daalein!'); }
+  if (!qty || qty <= 0) { qInput.focus(); return alert('Sahi Pcs daalein!'); }
+
+  const st = await dbGet('bunkarStock', bunkarName);
+  const avail = st ? st.qty : 0;
+  const alreadyAdded = jwState.batchRows.filter((r) => r.bunkarName === bunkarName).reduce((s, r) => s + r.qty, 0);
+
+  if (alreadyAdded + qty > avail) {
+    return alert(`Dukan me ${bunkarName} ki sirf ${avail} saree hai (abhi tak ${alreadyAdded} add ho chuki)!`);
+  }
+
+  jwState.batchRows.push({ bunkarName, qty });
+  bInput.value = '';
+  qInput.value = '';
+  await renderJWOutward();
+}
+
+function removeBatchRow(idx) {
+  jwState.batchRows.splice(idx, 1);
+  renderJWOutward();
+}
+
+async function saveBatchOutward() {
+  if (!jwState.batchRows.length) return alert('Batch khali hai! Kam se kam 1 saree add karein.');
+  const date = document.getElementById('batchDate').value || todayISO();
+  const note = document.getElementById('batchNote').value.trim();
+  const jwTypeUpper = jwState.jwType.toUpperCase();
+  const workerName = jwState.worker.name.toUpperCase();
+
+  let totalQty = 0;
+  for (const row of jwState.batchRows) {
+    const st = await dbGet('bunkarStock', row.bunkarName);
+    const avail = st ? st.qty : 0;
+    await dbPut('bunkarStock', { bunkarName: row.bunkarName, qty: Math.max(0, avail - row.qty), updatedAt: new Date().toISOString() });
+    totalQty += row.qty;
+  }
+
+  // Worker ke khate me Total Pending add (+)
+  const pendId = `${workerName}__${jwTypeUpper}`;
+  const curPend = await dbGet('jobWorkPending', pendId);
+  await dbPut('jobWorkPending', {
+    id: pendId, workerName, jobWorkType: jwTypeUpper, qty: (curPend ? curPend.qty : 0) + totalQty
+  });
+
+  // Ledger me Batch Save
+  await dbPut('jobWorkLedger', {
+    direction: 'OUT', jobWorkType: jwTypeUpper, workerName,
+    qty: totalQty, batchItems: jwState.batchRows, date, note, createdAt: Date.now()
+  });
+
+  alert(`📤 ${workerName} (${jwTypeUpper}) ko Total ${totalQty} Pcs Batch bhej diya gaya!`);
+  jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [] };
+  await refreshDashboard();
+  renderJWOutward();
+}
+
+// ==========================================
+// MODULE 2: STOCK INWARD (Simple, No Batch)
+// ==========================================
+async function renderStockInward() {
+  await openDB();
+  const box = document.getElementById('tab-inward');
+
+  // STEP 1: 2 SEEDHE RASTE
+  if (inState.step === 'MENU') {
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>2. Stock Inward — Maal Kahan se Aaya?</h2>
+          <span class="shortcut-hint">Key 1 ya 2 dabayein</span>
+        </div>
+        <div class="list-menu kbd-list">
+          <div class="list-row kbd-active" data-key="1" onclick="inState.step='DIRECT'; renderStockInward();">
+            <span>1. Direct Baithak se Aayi (Bunkar ke Naam se)</span>
+            <span class="badge">Key: 1</span>
+          </div>
+          <div class="list-row" data-key="2" onclick="inState.step='JW_TYPE'; renderStockInward();">
+            <span>2. Job Work se Wapas Aayi (Total Pcs Entry)</span>
+            <span class="badge">Key: 2</span>
+          </div>
+        </div>
+      </div>
+    `;
     return;
   }
-  const w = await dbGet('jobWorkers', Number(val));
-  if (!w) return;
-  document.getElementById(prefix + 'WorkerName').value = w.name;
-  document.getElementById(prefix + 'WorkerPhone').value = w.phone || '';
-  document.getElementById(prefix + 'WorkerAddr').value = w.address || '';
 
-  if (prefix === 'in') showPendingHintForWorker(w.name);
-}
-
-async function showPendingHintForWorker(workerName) {
-  const allPend = await dbGetAll('jobWorkPending');
-  const list = allPend.filter((p) => p.workerName === workerName.toUpperCase() && p.qty > 0);
-  const hint = document.getElementById('inWorkerPendingHint');
-  if (!list.length) {
-    hint.innerHTML = 'Is karigar par abhi koi pending nahi hai.';
+  // OPTION 1: DIRECT BAITHAK
+  if (inState.step === 'DIRECT') {
+    const stocks = await dbGetAll('bunkarStock');
+    const names = stocks.filter((s) => s.bunkarName !== JW_POOL_KEY);
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>Direct Baithak se Stock Inward</h2>
+          <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+        </div>
+        <div class="grid-2">
+          <div><label>Date</label><input type="date" id="dirDate" value="${todayISO()}" /></div>
+          <div>
+            <label>Saree (Bunkar ka Naam) *</label>
+            <input id="dirBunkar" list="dirBunkarList" placeholder="e.g. FARHAN" />
+            <datalist id="dirBunkarList">${names.map((n) => `<option value="${esc(n.bunkarName)}">`).join('')}</datalist>
+          </div>
+          <div><label>Quantity (Pcs) *</label><input type="number" id="dirQty" min="1" placeholder="e.g. 50" /></div>
+          <div>
+            <label>Note (Optional)</label>
+            <input id="dirNote" placeholder="e.g. Kora maal" data-custom-enter="1"
+                   onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveDirectInward(); }" />
+          </div>
+        </div>
+        <button class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveDirectInward()">
+          ✅ Save Direct Inward (Ctrl+S)
+        </button>
+      </div>
+    `;
+    setTimeout(() => document.getElementById('dirBunkar')?.focus(), 50);
     return;
   }
-  hint.innerHTML = '<b>Pending (Click karein auto-fill ke liye):</b> ' + list.map((p) =>
-    `<button type="button" class="btn btn-sm" style="margin:2px; background:#dbeafe; color:#1e3a8a;"
-      onclick="quickFillReturn('${esc(p.jobWorkType)}','${esc(p.bunkarName)}',${p.qty})">
-      ${esc(p.bunkarName)} (${esc(p.jobWorkType)}: ${p.qty} pcs)
-    </button>`
-  ).join('');
-}
 
-function quickFillReturn(jwType, bunkar, qty) {
-  document.getElementById('inJWType').value = jwType;
-  document.getElementById('inBunkarName').value = bunkar;
-  document.getElementById('inQty').value = qty;
-}
+  // OPTION 2A: JOB WORK TYPE CHUNEIN
+  if (inState.step === 'JW_TYPE') {
+    const types = await dbGetAll('jobWorkTypes');
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>Job Work Wapsi — Kaam Chunein</h2>
+          <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+        </div>
+        <div class="list-menu kbd-list">
+          ${types.map((t, i) => `
+            <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}"
+                 onclick="inState.jwType='${esc(t.name)}'; inState.step='JW_WORKER'; renderStockInward();">
+              <span>${i + 1}. ${esc(t.name)}</span>
+              <span class="badge">Enter →</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    return;
+  }
 
-// Save or Update Job Worker Master
-async function upsertJobWorker(name, phone, address) {
-  const upper = name.trim().toUpperCase();
-  const all = await dbGetAll('jobWorkers');
-  const existing = all.find((w) => w.name.toUpperCase() === upper);
-  const record = existing
-    ? { ...existing, name: upper, phone: phone.trim() || existing.phone, address: address.trim() || existing.address }
-    : { name: upper, phone: phone.trim(), address: address.trim() };
-  await dbPut('jobWorkers', record);
-  return record;
-}
+  // OPTION 2B: WORKER CHUNEIN (Pending Dikhega)
+  if (inState.step === 'JW_WORKER') {
+    const allWorkers = await dbGetAll('jobWorkers');
+    const workers = allWorkers.filter((w) => !w.jobWorkType || w.jobWorkType.toUpperCase() === inState.jwType.toUpperCase());
+    const pendList = await dbGetAll('jobWorkPending');
 
-// === SAVE MODULE 2: STOCK INWARD ===
-async function saveStockInward() {
-  const mode = document.getElementById('inwardMode').value;
-  const date = document.getElementById('inDate').value || todayISO();
-  const bunkarRaw = document.getElementById('inBunkarName').value.trim().toUpperCase();
-  const qty = parseInt(document.getElementById('inQty').value, 10);
-  const note = document.getElementById('inNote').value.trim();
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>${esc(inState.jwType)} Wapsi — Worker Chunein</h2>
+          <div>
+            <button class="btn btn-success btn-sm" onclick="showAddWorkerModal('in')">+ Naya Worker</button>
+            <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+          </div>
+        </div>
+        <div id="addWorkerInlineIn" class="hidden" style="background:#f9fafb; border:1px solid #d1d5db; padding:12px; border-radius:8px; margin-bottom:12px;">
+          <div class="grid-2">
+            <div><label>Worker Naam *</label><input id="newWNameIn" placeholder="e.g. Raju Calender" /></div>
+            <div><label>Mobile No.</label><input id="newWPhoneIn" type="tel" /></div>
+          </div>
+          <div style="margin-top:8px;"><label>Address</label><input id="newWAddrIn" /></div>
+          <button class="btn btn-dark btn-sm" style="margin-top:8px;" onclick="saveNewWorker('in')">Save Worker</button>
+        </div>
+        <div class="list-menu kbd-list">
+          ${workers.length ? workers.map((w, i) => {
+            const p = pendList.find((x) => x.id === `${w.name}__${inState.jwType.toUpperCase()}`);
+            const pQty = p ? p.qty : 0;
+            return `
+              <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}" onclick="pickInWorker(${w.id})">
+                <span>${i + 1}. ${esc(w.name)}</span>
+                <span class="badge" style="color:${pQty > 0 ? '#b91c1c' : '#15803d'};">Pending: ${pQty} Pcs</span>
+              </div>
+            `;
+          }).join('') : '<p style="color:#6b7280; font-size:13px;">Koi worker nahi mila.</p>'}
+        </div>
+      </div>
+    `;
+    return;
+  }
 
-  if (!bunkarRaw) return alert('Saree (Bunkar ka naam) daalna zaroori hai!');
-  if (!qty || qty <= 0) return alert('Sahi Quantity (Pcs) daalein!');
-
-  let jwType = 'DIRECT_BAITHAK';
-  let workerName = 'DIRECT BAITHAK';
-  let workerPhone = '-';
-  let workerAddr = '-';
-
-  if (mode === 'JOBWORK') {
-    jwType = document.getElementById('inJWType').value;
-    workerName = document.getElementById('inWorkerName').value.trim().toUpperCase();
-    workerPhone = document.getElementById('inWorkerPhone').value.trim();
-    workerAddr = document.getElementById('inWorkerAddr').value.trim();
-
-    if (!workerName) return alert('Job Worker ka naam daalein!');
-    await upsertJobWorker(workerName, workerPhone, workerAddr);
-
-    // Pending balance update
-    const pendId = `${workerName}__${jwType}__${bunkarRaw}`;
-    const pend = await dbGet('jobWorkPending', pendId);
+  // OPTION 2C: SIRF TOTAL WAPAS QTY ENTRY (NO BATCH / NO BUNKAR)
+  if (inState.step === 'JW_RETURN') {
+    const jwUpper = inState.jwType.toUpperCase();
+    const pend = await dbGet('jobWorkPending', `${inState.worker.name.toUpperCase()}__${jwUpper}`);
     const pendQty = pend ? pend.qty : 0;
 
-    if (qty > pendQty) {
-      const ok = confirm(`${workerName} (${jwType}) ke paas ${bunkarRaw} ki sirf ${pendQty} saree pending dikh rahi hai. Phir bhi ${qty} pcs Inward karna hai?`);
-      if (!ok) return;
-    }
-    const newPend = Math.max(0, pendQty - qty);
-    await dbPut('jobWorkPending', {
-      id: pendId, workerName, jobWorkType: jwType, bunkarName: bunkarRaw, qty: newPend
-    });
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>${esc(inState.jwType)} → ${esc(inState.worker.name)} (Wapsi)</h2>
+          <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+        </div>
+        <div style="background:#fef2f2; border:1px solid #fecaca; padding:12px; border-radius:8px; margin-bottom:12px; font-size:15px;">
+          Is Karigar par Total Pending: <b style="color:#b91c1c;">${pendQty} Pcs</b>
+        </div>
+        <div class="grid-2">
+          <div><label>Date</label><input type="date" id="jwRetDate" value="${todayISO()}" /></div>
+          <div>
+            <label>Total Kitni Saree Wapas Aayi (Pcs) *</label>
+            <input type="number" id="jwRetQty" min="1" value="${pendQty > 0 ? pendQty : ''}" placeholder="e.g. 200" />
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          <label>Note (Optional)</label>
+          <input id="jwRetNote" placeholder="e.g. Ok checked" data-custom-enter="1"
+                 onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveJWReturnInward(); }" />
+        </div>
+        <button class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveJWReturnInward()">
+          ✅ Wapsi Save Karein (Pending - / Stock +)
+        </button>
+      </div>
+    `;
+    setTimeout(() => { const el = document.getElementById('jwRetQty'); if (el) { el.focus(); el.select(); } }, 50);
   }
-
-  // Dukan ke Bunkar Stock me Add (+)
-  const curStock = await dbGet('bunkarStock', bunkarRaw);
-  const newStockQty = (curStock ? curStock.qty : 0) + qty;
-  await dbPut('bunkarStock', {
-    bunkarName: bunkarRaw,
-    qty: newStockQty,
-    updatedAt: new Date().toISOString()
-  });
-
-  // Ledger me Save
-  await dbPut('jobWorkLedger', {
-    direction: 'IN',
-    source: mode,
-    jobWorkType: jwType,
-    workerName,
-    workerPhone,
-    workerAddress: workerAddr,
-    bunkarName: bunkarRaw,
-    qty,
-    date,
-    note,
-    createdAt: Date.now()
-  });
-
-  document.getElementById('inQty').value = '';
-  document.getElementById('inNote').value = '';
-  await refreshStockUI();
-  if (typeof refreshDashboard === 'function') await refreshDashboard();
-  alert(`✅ ${bunkarRaw} ki ${qty} saree Dukan Stock me jud gayi!`);
 }
 
-// === SAVE MODULE 1: JOB WORK OUTWARD ===
-async function saveJobWorkOutward() {
-  const date = document.getElementById('outDate').value || todayISO();
-  const jwType = document.getElementById('outJWType').value;
-  const workerName = document.getElementById('outWorkerName').value.trim().toUpperCase();
-  const workerPhone = document.getElementById('outWorkerPhone').value.trim();
-  const workerAddr = document.getElementById('outWorkerAddr').value.trim();
-  const bunkarName = document.getElementById('outBunkarSelect').value;
-  const qty = parseInt(document.getElementById('outQty').value, 10);
-  const note = document.getElementById('outNote').value.trim();
+async function pickInWorker(id) {
+  inState.worker = await dbGet('jobWorkers', id);
+  inState.step = 'JW_RETURN';
+  renderStockInward();
+}
 
-  if (!workerName) return alert('Job Worker ka naam daalein!');
-  if (!bunkarName) return alert('Pehle Dukan Stock se Saree (Bunkar) chunein!');
+async function saveDirectInward() {
+  const date = document.getElementById('dirDate').value || todayISO();
+  const bunkarName = document.getElementById('dirBunkar').value.trim().toUpperCase();
+  const qty = parseInt(document.getElementById('dirQty').value, 10);
+  const note = document.getElementById('dirNote').value.trim();
+
+  if (!bunkarName) return alert('Bunkar ka naam daalein!');
+  if (!qty || qty <= 0) return alert('Sahi Pcs daalein!');
+
+  const cur = await dbGet('bunkarStock', bunkarName);
+  await dbPut('bunkarStock', { bunkarName, qty: (cur ? cur.qty : 0) + qty, updatedAt: new Date().toISOString() });
+  await dbPut('jobWorkLedger', {
+    direction: 'IN', jobWorkType: 'DIRECT_BAITHAK', workerName: 'DIRECT BAITHAK',
+    bunkarName, qty, date, note, createdAt: Date.now()
+  });
+
+  alert(`✅ ${bunkarName} ki ${qty} saree Dukan Stock me jud gayi!`);
+  document.getElementById('dirBunkar').value = '';
+  document.getElementById('dirQty').value = '';
+  document.getElementById('dirNote').value = '';
+  document.getElementById('dirBunkar').focus();
+  await refreshDashboard();
+}
+
+async function saveJWReturnInward() {
+  const date = document.getElementById('jwRetDate').value || todayISO();
+  const qty = parseInt(document.getElementById('jwRetQty').value, 10);
+  const note = document.getElementById('jwRetNote').value.trim();
+  const jwUpper = inState.jwType.toUpperCase();
+  const workerName = inState.worker.name.toUpperCase();
+
   if (!qty || qty <= 0) return alert('Sahi Quantity daalein!');
 
-  const curStock = await dbGet('bunkarStock', bunkarName);
-  const avail = curStock ? curStock.qty : 0;
-  if (qty > avail) {
-    return alert(`Dukan me ${bunkarName} ki sirf ${avail} saree bachi hai!`);
-  }
-
-  await upsertJobWorker(workerName, workerPhone, workerAddr);
-
-  // Dukan Stock se Minus (-)
-  await dbPut('bunkarStock', {
-    bunkarName,
-    qty: avail - qty,
-    updatedAt: new Date().toISOString()
-  });
-
-  // Pending Job Work me Plus (+)
-  const pendId = `${workerName}__${jwType}__${bunkarName}`;
+  const pendId = `${workerName}__${jwUpper}`;
   const pend = await dbGet('jobWorkPending', pendId);
-  await dbPut('jobWorkPending', {
-    id: pendId,
-    workerName,
-    jobWorkType: jwType,
-    bunkarName,
-    qty: (pend ? pend.qty : 0) + qty
-  });
+  const pendQty = pend ? pend.qty : 0;
 
-  // Ledger me Save
-  await dbPut('jobWorkLedger', {
-    direction: 'OUT',
-    source: 'JOBWORK_OUT',
-    jobWorkType: jwType,
-    workerName,
-    workerPhone,
-    workerAddress: workerAddr,
-    bunkarName,
-    qty,
-    date,
-    note,
-    createdAt: Date.now()
-  });
-
-  document.getElementById('outQty').value = '';
-  document.getElementById('outNote').value = '';
-  await refreshStockUI();
-  if (typeof refreshDashboard === 'function') await refreshDashboard();
-  alert(`📤 ${bunkarName} ki ${qty} saree ${workerName} (${jwType}) ke paas bhej di gayi!`);
-}
-
-// Pending table se 1-click Return pe bhejna
-function jumpToReturn(workerName, jwType, bunkarName, qty) {
-  openTabByName('tab-inward');
-  setInwardMode('JOBWORK');
-  document.getElementById('inJWType').value = jwType;
-  document.getElementById('inWorkerName').value = workerName;
-  document.getElementById('inBunkarName').value = bunkarName;
-  document.getElementById('inQty').value = qty;
-  dbGetAll('jobWorkers').then((ws) => {
-    const w = ws.find((x) => x.name.toUpperCase() === workerName);
-    if (w) {
-      document.getElementById('inWorkerSelect').value = w.id;
-      document.getElementById('inWorkerPhone').value = w.phone || '';
-      document.getElementById('inWorkerAddr').value = w.address || '';
-    }
-  });
-}
-
-// === REFRESH DROPDOWNS & TABLES ===
-async function refreshStockUI() {
-  if (!document.getElementById('inJWType')) return;
-  await openDB();
-
-  // 1. Job Work Types
-  const types = await dbGetAll('jobWorkTypes');
-  const typeOpts = types.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('');
-  document.getElementById('inJWType').innerHTML = typeOpts;
-  document.getElementById('outJWType').innerHTML = typeOpts;
-
-  // 2. Saved Job Workers
-  const workers = await dbGetAll('jobWorkers');
-  const workerOpts = '<option value="">-- Naya Job Worker --</option>' +
-    workers.map((w) => `<option value="${w.id}">${esc(w.name)} ${w.phone ? '(' + esc(w.phone) + ')' : ''}</option>`).join('');
-  document.getElementById('inWorkerSelect').innerHTML = workerOpts;
-  document.getElementById('outWorkerSelect').innerHTML = workerOpts;
-
-  // 3. Bunkar Live Stock
-  const stocks = await dbGetAll('bunkarStock');
-  document.getElementById('bunkarDatalist').innerHTML = stocks.map((s) => `<option value="${esc(s.bunkarName)}">`).join('');
-
-  const availStocks = stocks.filter((s) => s.qty > 0);
-  document.getElementById('bunkarStockTable').innerHTML = availStocks.map((s) => `
-    <tr><td><b>${esc(s.bunkarName)}</b></td><td><b>${s.qty} Pcs</b></td></tr>
-  `).join('') || '<tr><td colspan="2">Abhi dukan me koi Bunkar stock nahi hai</td></tr>';
-
-  document.getElementById('outBunkarSelect').innerHTML = availStocks.length
-    ? availStocks.map((s) => `<option value="${esc(s.bunkarName)}">${esc(s.bunkarName)} (Available: ${s.qty} Pcs)</option>`).join('')
-    : '<option value="">-- Dukan me stock 0 hai --</option>';
-
-  // 4. Recent Inward History
-  const ledger = await dbGetAll('jobWorkLedger');
-  const inwardLogs = ledger.filter((l) => l.direction === 'IN').sort((a, b) => b.createdAt - a.createdAt).slice(0, 20);
-  document.getElementById('inwardHistoryTable').innerHTML = inwardLogs.map((l) => `
-    <tr>
-      <td>${esc(l.date)}</td>
-      <td><b>${esc(l.workerName)}</b><br/><small>${esc(l.jobWorkType === 'DIRECT_BAITHAK' ? 'Direct Baithak' : l.jobWorkType)}</small></td>
-      <td>${esc(l.workerPhone || '-')}</td>
-      <td><b>${esc(l.bunkarName)}</b></td>
-      <td><b>+${l.qty}</b></td>
-    </tr>
-  `).join('') || '<tr><td colspan="5">Abhi koi Inward entry nahi hui</td></tr>';
-
-  // 5. Pending Job Work Table
-  const pending = (await dbGetAll('jobWorkPending')).filter((p) => p.qty > 0);
-  document.getElementById('jwPendingTable').innerHTML = pending.map((p) => `
-    <tr>
-      <td><b>${esc(p.workerName)}</b></td>
-      <td>${esc(p.jobWorkType)}</td>
-      <td><b>${esc(p.bunkarName)}</b></td>
-      <td><b style="color:#b91c1c;">${p.qty} Pcs</b></td>
-      <td>
-        <button class="btn btn-success btn-sm" onclick="jumpToReturn('${esc(p.workerName)}','${esc(p.jobWorkType)}','${esc(p.bunkarName)}',${p.qty})">
-          Wapas Aaya ↩️
-        </button>
-      </td>
-    </tr>
-  `).join('') || '<tr><td colspan="5">Kisi Job Worker ke paas koi maal pending nahi hai</td></tr>';
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-  renderInwardAndJobWorkHTML();
-  setTimeout(refreshStockUI, 250);
-});
-
-document.addEventListener('click', (e) => {
-  if (e.target && e.target.classList.contains('nav-btn')) {
-    refreshStockUI();
+  if (qty > pendQty) {
+    if (!confirm(`${workerName} par sirf ${pendQty} Pcs pending hai. Phir bhi ${qty} Pcs wapsi enter karna hai?`)) return;
   }
-});
+
+  await dbPut('jobWorkPending', { id: pendId, workerName, jobWorkType: jwUpper, qty: Math.max(0, pendQty - qty) });
+
+  // Returned Stock Pool me Add (+)
+  const pool = await dbGet('bunkarStock', JW_POOL_KEY);
+  await dbPut('bunkarStock', { bunkarName: JW_POOL_KEY, qty: (pool ? pool.qty : 0) + qty, updatedAt: new Date().toISOString() });
+
+  await dbPut('jobWorkLedger', {
+    direction: 'IN', jobWorkType: jwUpper, workerName, qty, date, note, createdAt: Date.now()
+  });
+
+  alert(`✅ ${workerName} se ${qty} Pcs wapas aa gayi! (Baki Pending: ${Math.max(0, pendQty - qty)} Pcs)`);
+  inState = { step: 'MENU', jwType: '', worker: null };
+  await refreshDashboard();
+  renderStockInward();
+}
