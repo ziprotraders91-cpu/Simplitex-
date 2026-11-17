@@ -1,8 +1,12 @@
-// === SimpliTex Module 1 & 2 v6: Pro Job Work & Stock Inward (Swarovski 6-Field/Bill+Slip + Auto-Convert + Date Lists + Progress + Delete Guard) ===
+// === SimpliTex Module 1 & 2 v6: Job Work & Stock Inward ===
+// Features: 3-Field vs Swarovski 6-Field Worker, Bill + Packing Slip ONLY for Swarovski,
+// Clickable Outward & Inward Lists + From-To Date Filter, Progress Bars + Damage/Shortage,
+// Karigar-Wise FIFO Preview + Auto-Convert Dukan Barcode on JW Wapsi, Accidental Delete Guard.
 
 const _JW_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
+
 let jwState = {
-  step: 'TYPE',
+  step: 'TYPE', // 'TYPE' | 'OUT_LIST' | 'WORKER' | 'PASSBOOK' | 'BATCH'
   jwType: '',
   worker: null,
   batchRows: [],
@@ -11,22 +15,29 @@ let jwState = {
   editId: null,
   origCreatedAt: null,
   origQtyMap: {},
-  returnStep: '',
-  listFilter: { from: '', to: '', type: 'ALL', worker: 'ALL' },
-  pbFilter: { from: '', to: '' }
+  fromDate: '',
+  toDate: '',
+  filterType: 'ALL',
+  filterWorker: 'ALL',
+  returnTo: ''
 };
+
 let inState = {
-  step: 'MENU',
+  step: 'MENU', // 'MENU' | 'HISTORY' | 'DIRECT' | 'JW_TYPE' | 'JW_WORKER' | 'JW_RETURN'
   jwType: '',
   worker: null,
   editId: null,
   editOrig: null,
   returnTo: '',
-  histFilter: { from: '', to: '', source: 'ALL' }
+  fromDate: '',
+  toDate: '',
+  filterSource: 'ALL'
 };
 
-function jwNotify(msg, type = 'info') {
-  if (typeof window.stxToast === 'function') window.stxToast(msg, type);
+let _jwReturnSimCache = { queue: [], openingRem: 0, karigarMap: {} };
+
+function jwNotify(msg, type = 'info', ms = 2800) {
+  if (typeof window.stxToast === 'function') window.stxToast(msg, type, ms);
   else alert(msg);
 }
 
@@ -47,32 +58,8 @@ function formatDMY(iso) {
   return `${d}.${m}.${y.slice(-2)}`;
 }
 
-function isSwarovskiType(t) {
-  const u = String(t || '').toUpperCase();
-  return u.includes('SWAR') || u.includes('SIRO');
-}
-
-function getKarigarDesignMapClean() {
-  try {
-    const raw = JSON.parse(localStorage.getItem('simplitex_karigar_design_map') || '{}');
-    const out = {};
-    Object.keys(raw || {}).forEach((k) => {
-      const v = raw[k];
-      if (!v) return;
-      if (typeof v === 'string') {
-        out[k.toUpperCase()] = { designName: v.toUpperCase(), specLine: '', auto: true };
-      } else if (typeof v === 'object' && v.designName) {
-        out[k.toUpperCase()] = {
-          designName: String(v.designName).toUpperCase(),
-          specLine: String(v.specLine || '').toUpperCase(),
-          auto: v.auto !== false
-        };
-      }
-    });
-    return out;
-  } catch (_) {
-    return {};
-  }
+function isSwarovskiType(jwType) {
+  return /SWAR|SIRO/i.test(String(jwType || ''));
 }
 
 function getSavedWorkDetails() {
@@ -88,38 +75,29 @@ function rememberWorkDetail(txt) {
   }
 }
 
+function getKarigarMapSafe() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('simplitex_karigar_design_map') || '{}');
+    const out = {};
+    Object.keys(raw || {}).forEach((k) => {
+      const v = raw[k];
+      if (!v) return;
+      if (typeof v === 'string') {
+        out[k.toUpperCase()] = { designName: v.toUpperCase(), specLine: '', auto: true };
+      } else if (v.designName) {
+        out[k.toUpperCase()] = {
+          designName: String(v.designName).toUpperCase(),
+          specLine: String(v.specLine || '').toUpperCase(),
+          auto: v.auto !== false
+        };
+      }
+    });
+    return out;
+  } catch (_) { return {}; }
+}
+
 function resetPager(id) {
   if (window._stxPagerState) delete window._stxPagerState[id];
-}
-
-function inDateRange(dateStr, from, to) {
-  const d = String(dateStr || '');
-  if (from && d < from) return false;
-  if (to && d > to) return false;
-  return true;
-}
-
-function renderProgressHtml(okQty, dmgQty, totalQty) {
-  const tot = Math.max(1, Number(totalQty) || 0);
-  const ok = Math.max(0, Number(okQty) || 0);
-  const dmg = Math.max(0, Number(dmgQty) || 0);
-  const done = Math.min(tot, ok + dmg);
-  const pct = Math.round((done / tot) * 100);
-  const pend = Math.max(0, tot - done);
-  const isDone = pend === 0;
-  const pillCls = isDone ? 'stx-pill-ok' : (done > 0 ? 'stx-pill-warn' : 'stx-pill-info');
-  const pillTxt = isDone ? '✅ Complete' : (done > 0 ? `⏳ ${pend} Baki` : `📤 ${pend} Pending`);
-  const fillCls = isDone ? 'done' : (done > 0 ? 'warn' : '');
-
-  return `
-    <div>
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; font-size:11.5px;">
-        <span><b>${done}/${tot}</b>${dmg > 0 ? ` <small style="color:#dc2626;">(${dmg} Dmg)</small>` : ''}</span>
-        <span class="stx-pill ${pillCls}">${pillTxt}</span>
-      </div>
-      <div class="stx-prog-wrap"><div class="stx-prog-fill ${fillCls}" style="width:${pct}%;"></div></div>
-    </div>
-  `;
 }
 
 function switchTabSectionOnly(tabId) {
@@ -134,59 +112,22 @@ function switchTabSectionOnly(tabId) {
 }
 
 async function getNextJobWorkNoFast() {
-  const db = await openDB();
-  if (!db || typeof db.transaction !== 'function') {
-    const all = await dbGetAll('jobWorkLedger');
-    let maxNo = 0;
-    for (const v of all) {
-      if (v && v.direction === 'OUT') {
-        const n = Number(v.jobWorkNo) || 0;
-        if (n > maxNo) maxNo = n;
-      }
+  const all = await dbGetAll('jobWorkLedger');
+  let maxNo = 0;
+  for (const v of all) {
+    if (v && v.direction === 'OUT') {
+      const n = Number(v.jobWorkNo) || 0;
+      if (n > maxNo) maxNo = n;
     }
-    return maxNo + 1;
   }
-
-  return new Promise((resolve) => {
-    const tx = db.transaction('jobWorkLedger', 'readonly');
-    const store = tx.objectStore('jobWorkLedger');
-    let maxNo = 0, outFound = 0;
-    const req = store.openCursor(null, 'prev');
-    req.onsuccess = (e) => {
-      const cur = e.target.result;
-      if (!cur || outFound >= 25) return resolve(maxNo + 1);
-      const v = cur.value;
-      if (v && v.direction === 'OUT') {
-        outFound++;
-        const n = Number(v.jobWorkNo) || 0;
-        if (n > maxNo) maxNo = n;
-      }
-      cur.continue();
-    };
-    req.onerror = () => resolve(1);
-  });
+  return maxNo + 1;
 }
 
 async function countInwardLedgerFast() {
-  const db = await openDB();
-  if (!db || typeof db.transaction !== 'function') {
-    const ins = await dbGetByIndex('jobWorkLedger', 'direction', 'IN');
-    return ins.length;
-  }
-
-  return new Promise((resolve) => {
-    const tx = db.transaction('jobWorkLedger', 'readonly');
-    const store = tx.objectStore('jobWorkLedger');
-    if (store.indexNames.contains('direction')) {
-      const req = store.index('direction').count('IN');
-      req.onsuccess = () => resolve(req.result || 0);
-      req.onerror = () => resolve(0);
-    } else {
-      const req = store.getAll();
-      req.onsuccess = () => resolve((req.result || []).filter((l) => l.direction === 'IN').length);
-      req.onerror = () => resolve(0);
-    }
-  });
+  const ins = (typeof dbGetByIndex === 'function')
+    ? await dbGetByIndex('jobWorkLedger', 'direction', 'IN')
+    : (await dbGetAll('jobWorkLedger')).filter((l) => l.direction === 'IN');
+  return ins.length;
 }
 
 function ensureJWPrintSetup(pageCss) {
@@ -211,62 +152,63 @@ function ensureJWPrintSetup(pageCss) {
   pageSt.textContent = pageCss || '@media print { @page { size: A5 landscape; margin: 6mm; } }';
 }
 
-const _prevTabHookInw = window.onTabChanged;
+function buildProgressCell(sent, ok, dmg, pending) {
+  const done = ok + dmg;
+  const pct = sent > 0 ? Math.min(100, Math.round((done / sent) * 100)) : 0;
+  const isComplete = pending <= 0 && sent > 0;
+  const fillCls = isComplete ? 'done' : (done > 0 ? 'warn' : '');
+  const pill = isComplete
+    ? `<span class="stx-pill stx-pill-ok">✅ Complete</span>`
+    : (done > 0
+      ? `<span class="stx-pill stx-pill-warn">⏳ ${pending} Baki</span>`
+      : `<span class="stx-pill stx-pill-bad">📤 ${pending} Pending</span>`);
+  const dmgTxt = dmg > 0 ? ` <small style="color:#dc2626;">(Dmg: ${dmg})</small>` : '';
+  return `
+    <div>
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; font-size:11.5px;">
+        <b>${ok}/${sent} OK${dmgTxt}</b>
+        ${pill}
+      </div>
+      <div class="stx-prog-wrap"><div class="stx-prog-fill ${fillCls}" style="width:${pct}%;"></div></div>
+    </div>
+  `;
+}
+
+// === TAB & ESCAPE HOOKS ===
 window.onTabChanged = function (tabId) {
-  if (_prevTabHookInw) _prevTabHookInw(tabId);
   if (tabId === 'tab-jobwork') {
-    jwState.step = 'TYPE';
-    jwState.jwType = '';
-    jwState.worker = null;
-    jwState.batchRows = [];
-    jwState.meta = null;
-    jwState.autoJobWorkNo = null;
-    jwState.editId = null;
-    jwState.origCreatedAt = null;
-    jwState.origQtyMap = {};
-    jwState.returnStep = '';
+    jwState = {
+      step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, autoJobWorkNo: null,
+      editId: null, origCreatedAt: null, origQtyMap: {},
+      fromDate: '', toDate: '', filterType: 'ALL', filterWorker: 'ALL', returnTo: ''
+    };
     resetPager('jwTypePager');
     renderJWOutward();
   } else if (tabId === 'tab-inward') {
-    inState.step = 'MENU';
-    inState.jwType = '';
-    inState.worker = null;
-    inState.editId = null;
-    inState.editOrig = null;
-    inState.returnTo = '';
+    inState = {
+      step: 'MENU', jwType: '', worker: null, editId: null, editOrig: null,
+      returnTo: '', fromDate: '', toDate: '', filterSource: 'ALL'
+    };
     renderStockInward();
   }
 };
 
-const _prevEscHookInw = window.handleModuleEscape;
 window.handleModuleEscape = function () {
-  if (_prevEscHookInw && _prevEscHookInw()) return true;
   const sec = document.querySelector('.tab-sec:not(.hidden)');
   if (!sec) return false;
   if (sec.id === 'tab-jobwork') {
     if (jwState.step === 'BATCH') {
-      const target = jwState.returnStep || 'WORKER';
-      jwState.step = target;
-      jwState.meta = null;
-      jwState.autoJobWorkNo = null;
-      jwState.editId = null;
-      jwState.origQtyMap = {};
-      jwState.returnStep = '';
-      if (target === 'WORKER') jwState.worker = null;
-      renderJWOutward();
-      return true;
+      const ret = jwState.returnTo;
+      jwState.meta = null; jwState.autoJobWorkNo = null; jwState.editId = null; jwState.origQtyMap = {}; jwState.batchRows = []; jwState.returnTo = '';
+      if (ret === 'OUT_LIST') { jwState.step = 'OUT_LIST'; renderJWOutward(); return true; }
+      if (ret === 'PASSBOOK') { jwState.step = 'PASSBOOK'; renderJWOutward(); return true; }
+      jwState.step = 'WORKER'; jwState.worker = null; renderJWOutward(); return true;
     }
     if (jwState.step === 'PASSBOOK') {
-      jwState.step = 'WORKER';
-      jwState.worker = null;
-      renderJWOutward();
-      return true;
+      jwState.step = 'WORKER'; jwState.worker = null; renderJWOutward(); return true;
     }
-    if (jwState.step === 'OUT_LIST' || jwState.step === 'WORKER') {
-      jwState.step = 'TYPE';
-      jwState.jwType = '';
-      renderJWOutward();
-      return true;
+    if (jwState.step === 'WORKER' || jwState.step === 'OUT_LIST') {
+      jwState.step = 'TYPE'; jwState.jwType = ''; renderJWOutward(); return true;
     }
   }
   if (sec.id === 'tab-inward') {
@@ -289,52 +231,60 @@ window.handleModuleEscape = function () {
   return false;
 };
 
-// === MODULE 1: JOB WORK OUTWARD ===
-function buildWorkerFormHtml(jwType, pfx) {
+// === CONDITIONAL WORKER FORM (Swarovski = 6 Fields | Others = 3 Fields) ===
+function buildWorkerFormHtml(mode, jwType) {
+  const pfx = mode === 'out' ? 'Out' : 'In';
+  const boxId = mode === 'out' ? 'addWorkerInlineOut' : 'addWorkerInlineIn';
   const isSwar = isSwarovskiType(jwType);
-  if (isSwar) {
+
+  if (!isSwar) {
     return `
-      <input type="hidden" id="editWorkerId${pfx}" value="" />
-      <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:8px;">
-        💎 Swarovski Worker — Complete 6 Details
+      <div id="${boxId}" class="hidden stx-subpanel">
+        <div style="font-size:12px; font-weight:800; color:#1e3a8a; margin-bottom:10px;">
+          👷 ${esc(jwType)} Worker (Sirf 3 Details)
+        </div>
+        <input type="hidden" id="editWorkerId${pfx}" value="" />
+        <div class="grid-2" style="align-items:start;">
+          <div><label>1. Name *</label><input id="newWName${pfx}" placeholder="e.g. RAJU CUTTING" /></div>
+          <div><label>2. Mob. No.</label><input id="newWPhone${pfx}" type="tel" placeholder="98xxxxxxxx" /></div>
+          <div><label>3. Address</label><input id="newWAddr${pfx}" placeholder="Market / Mohalla..." /></div>
+          <div><label style="visibility:hidden;">.</label><button type="button" class="btn btn-dark" style="height:42px; width:100%;" onclick="saveNewWorker('${mode}')">✅ Save Worker</button></div>
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div id="${boxId}" class="hidden stx-subpanel">
+      <div style="font-size:12px; font-weight:800; color:#1e3a8a; margin-bottom:10px;">
+        💎 ${esc(jwType)} Worker (Full 6 Details)
       </div>
+      <input type="hidden" id="editWorkerId${pfx}" value="" />
       <div class="grid-2" style="align-items:start;">
         <div><label>1. Name *</label><input id="newWName${pfx}" placeholder="e.g. G.K. FABRICS" /></div>
         <div><label>2. Mob. No.</label><input id="newWPhone${pfx}" type="tel" placeholder="98xxxxxxxx" /></div>
-        <div><label>3. Address</label><input id="newWAddr${pfx}" placeholder="e.g. Ring Road, Surat" /></div>
+        <div><label>3. Address</label><input id="newWAddr${pfx}" placeholder="Shop / Factory address..." /></div>
         <div><label>4. City</label><input id="newWCity${pfx}" placeholder="e.g. SURAT / VARANASI" /></div>
         <div><label>5. Transport</label><input id="newWTrans${pfx}" placeholder="e.g. Kashi Express" /></div>
         <div><label>6. GSTIN</label><input id="newWGst${pfx}" placeholder="e.g. 24AA..." /></div>
       </div>
-      <button type="button" class="btn btn-dark" style="margin-top:10px; width:100%; height:42px;" onclick="saveNewWorker('${pfx === 'Out' ? 'out' : 'in'}')">✅ Save Swarovski Worker</button>
-    `;
-  }
-  return `
-    <input type="hidden" id="editWorkerId${pfx}" value="" />
-    <div style="font-size:12px; font-weight:700; color:#475569; margin-bottom:8px;">
-      🧵 ${esc(jwType)} Worker — Sirf 3 Details (Name, Mob, Address)
-    </div>
-    <div class="grid-2" style="align-items:start;">
-      <div><label>1. Name *</label><input id="newWName${pfx}" placeholder="e.g. RAJU CUTTING" /></div>
-      <div><label>2. Mob. No.</label><input id="newWPhone${pfx}" type="tel" placeholder="98xxxxxxxx" /></div>
-      <div><label>3. Address</label><input id="newWAddr${pfx}" placeholder="e.g. Sadar Chowk, Mau" /></div>
-      <div><label style="visibility:hidden;">.</label><button type="button" class="btn btn-dark" style="height:42px; width:100%;" onclick="saveNewWorker('${pfx === 'Out' ? 'out' : 'in'}')">✅ Save Worker</button></div>
-    </div>
-  `;
+      <button type="button" class="btn btn-dark" style="margin-top:12px; width:100%;" onclick="saveNewWorker('${mode}')">✅ Save Swarovski Worker</button>
+    </div>`;
 }
 
+// === MODULE 1: JOB WORK OUTWARD ===
 async function renderJWOutward() {
   await openDB();
   const box = document.getElementById('tab-jobwork');
 
   if (jwState.step === 'TYPE') {
     const types = await dbGetAll('jobWorkTypes');
+    const allOut = (await dbGetByIndex('jobWorkLedger', 'direction', 'OUT')).length;
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
           <h2>1. Job Work Outward — Kaam Chunein</h2>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button class="btn btn-light btn-sm" onclick="jwState.step='OUT_LIST'; resetPager('jwOutListPager'); renderJWOutward();">📋 Outward List (Date Filter)</button>
+            <button class="btn btn-primary btn-sm" onclick="jwState.step='OUT_LIST'; resetPager('jwOutListPager'); renderJWOutward();">📋 Outward List (${allOut})</button>
             <button class="btn btn-dark btn-sm" onclick="addJobWorkTypePrompt('out')">+ Naya Job Work</button>
           </div>
         </div>
@@ -342,44 +292,44 @@ async function renderJWOutward() {
       </div>`;
     mountPagedList({
       id: 'jwTypePager', mode: 'list', items: types, perPage: 15,
-      placeholder: '🔍 Job Work search karein (Cutting, Calender, Embroidery, Jhalar, Swarovski)...',
+      placeholder: '🔍 Job Work search karein (Cutting, Calender, Swarovski...)...',
       getSearchText: (t) => t.name,
-      renderRow: (t, gIdx, pageIdx) => `<div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickOutJWType('${esc(t.name)}')"><span>${gIdx + 1}. ${esc(t.name)} ${isSwarovskiType(t.name) ? '<small style="color:#2563eb; font-weight:700;">(Bill + Slip)</small>' : ''}</span><span class="badge">Enter →</span></div>`
+      renderRow: (t, gIdx, pageIdx) => `
+        <div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickOutJWType('${esc(t.name)}')">
+          <span>${gIdx + 1}. ${esc(t.name)} ${isSwarovskiType(t.name) ? '<small style="color:#2563eb;">(Bill + Slip)</small>' : ''}</span>
+          <span class="badge">Enter →</span>
+        </div>`
     });
     return;
   }
 
   if (jwState.step === 'OUT_LIST') {
     const allLedger = await dbGetAll('jobWorkLedger');
-    const types = await dbGetAll('jobWorkTypes');
-    const workers = await dbGetAll('jobWorkers');
     const analytics = (typeof window.stxGetJWAnalytics === 'function')
       ? await window.stxGetJWAnalytics()
       : { outProgressMap: {} };
     const progMap = analytics.outProgressMap || {};
 
-    const outAll = allLedger
+    const allOut = allLedger
       .filter((l) => l.direction === 'OUT')
       .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
 
-    const f = jwState.listFilter;
-    const filtered = outAll.filter((l) => {
-      if (!inDateRange(l.date, f.from, f.to)) return false;
-      if (f.type !== 'ALL' && String(l.jobWorkType || '').toUpperCase() !== f.type) return false;
-      if (f.worker !== 'ALL' && String(l.workerName || '').toUpperCase() !== f.worker) return false;
+    const typeSet = Array.from(new Set(allOut.map((l) => l.jobWorkType).filter(Boolean))).sort();
+    const workerSet = Array.from(new Set(allOut.map((l) => l.workerName).filter(Boolean))).sort();
+
+    const filtered = allOut.filter((l) => {
+      if (jwState.fromDate && (l.date || '') < jwState.fromDate) return false;
+      if (jwState.toDate && (l.date || '') > jwState.toDate) return false;
+      if (jwState.filterType !== 'ALL' && l.jobWorkType !== jwState.filterType) return false;
+      if (jwState.filterWorker !== 'ALL' && l.workerName !== jwState.filterWorker) return false;
       return true;
     });
 
     let sumSent = 0, sumOk = 0, sumDmg = 0, sumPend = 0;
     filtered.forEach((l) => {
       const p = progMap[l.id] || { totalQty: Number(l.qty) || 0, okQty: 0, damageQty: 0, pendingQty: Number(l.qty) || 0 };
-      sumSent += p.totalQty;
-      sumOk += p.okQty;
-      sumDmg += p.damageQty;
-      sumPend += p.pendingQty;
+      sumSent += p.totalQty; sumOk += p.okQty; sumDmg += p.damageQty; sumPend += p.pendingQty;
     });
-
-    const workerNames = Array.from(new Set(outAll.map((l) => String(l.workerName || '').toUpperCase()).filter(Boolean))).sort();
 
     box.innerHTML = `
       <div class="card">
@@ -391,69 +341,69 @@ async function renderJWOutward() {
         <div class="stx-filter-bar">
           <div class="stx-f-item">
             <label>From Date</label>
-            <input type="date" id="jwOutFrom" value="${esc(f.from)}" onchange="jwState.listFilter.from=this.value; resetPager('jwOutListPager'); renderJWOutward();" />
+            <input type="date" value="${esc(jwState.fromDate)}" onchange="jwState.fromDate=this.value; resetPager('jwOutListPager'); renderJWOutward();" />
           </div>
           <div class="stx-f-item">
             <label>To Date</label>
-            <input type="date" id="jwOutTo" value="${esc(f.to)}" onchange="jwState.listFilter.to=this.value; resetPager('jwOutListPager'); renderJWOutward();" />
+            <input type="date" value="${esc(jwState.toDate)}" onchange="jwState.toDate=this.value; resetPager('jwOutListPager'); renderJWOutward();" />
           </div>
           <div class="stx-f-item">
-            <label>Job Work Type</label>
-            <select onchange="jwState.listFilter.type=this.value; resetPager('jwOutListPager'); renderJWOutward();">
+            <label>Kaam (Type)</label>
+            <select onchange="jwState.filterType=this.value; resetPager('jwOutListPager'); renderJWOutward();">
               <option value="ALL">Sabhi Kaam</option>
-              ${types.map((t) => `<option value="${esc(t.name.toUpperCase())}" ${f.type === t.name.toUpperCase() ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+              ${typeSet.map((t) => `<option value="${esc(t)}" ${jwState.filterType === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
             </select>
           </div>
           <div class="stx-f-item">
-            <label>Worker (Kahan Gayi)</label>
-            <select onchange="jwState.listFilter.worker=this.value; resetPager('jwOutListPager'); renderJWOutward();">
+            <label>Worker (Karigar)</label>
+            <select onchange="jwState.filterWorker=this.value; resetPager('jwOutListPager'); renderJWOutward();">
               <option value="ALL">Sabhi Workers</option>
-              ${workerNames.map((wn) => `<option value="${esc(wn)}" ${f.worker === wn ? 'selected' : ''}>${esc(wn)}</option>`).join('')}
+              ${workerSet.map((w) => `<option value="${esc(w)}" ${jwState.filterWorker === w ? 'selected' : ''}>${esc(w)}</option>`).join('')}
             </select>
           </div>
-          <button type="button" class="btn btn-light btn-sm" onclick="jwState.listFilter={from:'',to:'',type:'ALL',worker:'ALL'}; resetPager('jwOutListPager'); renderJWOutward();">Clear Filter</button>
+          <button type="button" class="btn btn-light btn-sm" onclick="jwState.fromDate=''; jwState.toDate=''; jwState.filterType='ALL'; jwState.filterWorker='ALL'; resetPager('jwOutListPager'); renderJWOutward();">Reset</button>
         </div>
 
         <div class="stx-summary-strip">
-          <div class="stx-summary-pill"><small>Total Entries</small><b>${filtered.length}</b></div>
+          <div class="stx-summary-pill"><small>Entries</small><b>${filtered.length}</b></div>
           <div class="stx-summary-pill"><small>Total Sent</small><b style="color:#2563eb;">${sumSent} Pcs</b></div>
           <div class="stx-summary-pill"><small>Wapas OK</small><b style="color:#16a34a;">${sumOk} Pcs</b></div>
-          <div class="stx-summary-pill"><small>Damage / Short</small><b style="color:#dc2626;">${sumDmg} Pcs</b></div>
-          <div class="stx-summary-pill"><small>Abhi Pending</small><b style="color:#d97706;">${sumPend} Pcs</b></div>
+          <div class="stx-summary-pill"><small>Damage / Short</small><b style="color:#d97706;">${sumDmg} Pcs</b></div>
+          <div class="stx-summary-pill"><small>Abhi Pending</small><b style="color:#dc2626;">${sumPend} Pcs</b></div>
         </div>
 
-        <div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:8px;">
-          💡 Kisi bhi entry par <b>Click</b> karne par uska poora Form khul jayega!
+        <div style="font-size:12px; color:#475569; margin-bottom:8px; font-weight:600;">
+          💡 Kisi bhi row par <b>click karne par uska poora Outward Form</b> khul jayega.
         </div>
-
         <div id="jwOutListPager"></div>
       </div>`;
 
     mountPagedList({
-      id: 'jwOutListPager',
-      items: filtered,
-      perPage: 15,
-      placeholder: '🔍 Date, Karigar naam, Worker, #No ya Kaam search karein...',
-      headHtml: '<tr><th>Date / #</th><th>Kaam & Worker</th><th>Kiski-Kiski Saree Gayi (Karigar)</th><th>Wapsi Progress</th><th>Action</th></tr>',
-      getSearchText: (l) => `${l.date} ${l.jobWorkNo || ''} ${l.jobWorkType} ${l.workerName} ${(l.batchItems || []).map((b) => b.bunkarName).join(' ')} ${l.note || ''}`,
+      id: 'jwOutListPager', items: filtered, perPage: 15,
+      placeholder: '🔍 Karigar naam, Worker, Kaam, No. ya Note search karein...',
+      headHtml: '<tr><th>Date / #</th><th>Kahan Gayi (Worker & Kaam)</th><th>Kiski Kitni Saree Gayi</th><th>Wapsi Progress</th><th>Action</th></tr>',
+      getSearchText: (l) => {
+        const bTxt = (l.batchItems || []).map((b) => `${b.bunkarName} ${b.qty}`).join(' ');
+        return `${l.date} ${l.jobWorkNo || ''} ${l.jobWorkType} ${l.workerName} ${bTxt} ${l.note || ''}`;
+      },
       renderRow: (l) => {
+        const p = progMap[l.id] || { totalQty: Number(l.qty) || 0, okQty: 0, damageQty: 0, pendingQty: Number(l.qty) || 0 };
         const isSwar = isSwarovskiType(l.jobWorkType);
-        const prog = progMap[l.id] || { totalQty: Number(l.qty) || 0, okQty: 0, damageQty: 0, pendingQty: Number(l.qty) || 0 };
-        const karigarsTxt = (l.batchItems || []).map((b) => `<b>${esc(b.bunkarName === _JW_POOL ? 'POOL' : b.bunkarName)}</b> (${b.qty})`).join(', ');
+        const batchTxt = (l.batchItems || []).map((b) => `<b>${esc(b.bunkarName === _JW_POOL ? 'POOL' : b.bunkarName)}</b> (${b.qty})`).join(', ');
         return `
           <tr class="stx-row-click" onclick="editLedgerOut(${l.id}, 'OUT_LIST')">
             <td style="white-space:nowrap;"><b>${esc(l.date)}</b>${l.jobWorkNo ? `<br/><small style="color:#64748b;">#${esc(l.jobWorkNo)}</small>` : ''}</td>
-            <td><span class="stx-pill stx-pill-info">${esc(l.jobWorkType)}</span><br/><b>${esc(l.workerName)}</b>${l.destination ? `<br/><small style="color:#64748b;">${esc(l.destination)}</small>` : ''}</td>
-            <td><small>${karigarsTxt || '-'}</small>${l.note ? `<br/><small style="color:#64748b;">Kaam: ${esc(l.note)}</small>` : ''}</td>
-            <td style="min-width:155px;">${renderProgressHtml(prog.okQty, prog.damageQty, prog.totalQty)}</td>
+            <td><b>${esc(l.workerName)}</b><br/><small style="color:#2563eb; font-weight:700;">${esc(l.jobWorkType)}</small></td>
+            <td><small>${batchTxt || '-'}</small>${l.note ? `<br/><small style="color:#64748b;">Note: ${esc(l.note)}</small>` : ''}</td>
+            <td style="min-width:155px;">${buildProgressCell(p.totalQty, p.okQty, p.damageQty, p.pendingQty)}</td>
             <td style="white-space:nowrap;" onclick="event.stopPropagation()">
-              ${isSwar ? `<button class="btn btn-dark btn-sm" title="A5 Bill" onclick="printJobWorkBill(${l.id})">🖨️ Bill</button> <button class="btn btn-success btn-sm" title="Packing Slip" onclick="printJobWorkPackingSlip(${l.id})">📦 Slip</button>` : ''}
-              <button class="btn btn-light btn-sm" title="Edit Form" onclick="editLedgerOut(${l.id}, 'OUT_LIST')">✏️</button>
+              ${isSwar ? `<button class="btn btn-dark btn-sm" title="A5 Bill" onclick="printJobWorkBill(${l.id})">🖨️ Bill</button> <button class="btn btn-success btn-sm" title="Packing Slip" onclick="printJobWorkPackingSlip(${l.id})">📦 Slip</button> ` : ''}
+              <button class="btn btn-light btn-sm" title="Edit" onclick="editLedgerOut(${l.id}, 'OUT_LIST')">✏️</button>
               <button class="btn btn-danger btn-sm" title="Delete" onclick="reverseLedgerEntry(${l.id}, 'OUT_LIST')">🗑️</button>
             </td>
           </tr>`;
       },
-      emptyHtml: '<tr><td colspan="5">Selected filter me koi Job Work Outward record nahi mila</td></tr>'
+      emptyHtml: '<tr><td colspan="5">Is date range mein koi Outward entry nahi mili</td></tr>'
     });
     return;
   }
@@ -462,35 +412,28 @@ async function renderJWOutward() {
     const allWorkers = await dbGetAll('jobWorkers');
     const workers = allWorkers.filter((w) => !w.jobWorkType || w.jobWorkType.toUpperCase() === jwState.jwType.toUpperCase());
     const pendList = await dbGetAll('jobWorkPending');
-    const isSwar = isSwarovskiType(jwState.jwType);
-
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
           <h2>${esc(jwState.jwType)} — Worker Chunein</h2>
-          <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button class="btn btn-light btn-sm" onclick="jwState.listFilter.type='${esc(jwState.jwType.toUpperCase())}'; jwState.step='OUT_LIST'; resetPager('jwOutListPager'); renderJWOutward();">📋 Outward List</button>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
             <button class="btn btn-success btn-sm" onclick="showAddWorkerModal('out')">+ Naya Worker</button>
+            <button class="btn btn-primary btn-sm" onclick="jwState.filterType='${esc(jwState.jwType.toUpperCase())}'; jwState.step='OUT_LIST'; resetPager('jwOutListPager'); renderJWOutward();">📋 Outward List</button>
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
-        <div id="addWorkerInlineOut" class="stx-subpanel hidden">
-          ${buildWorkerFormHtml(jwState.jwType, 'Out')}
-        </div>
+        ${buildWorkerFormHtml('out', jwState.jwType)}
         <div id="jwWorkerPager"></div>
       </div>`;
     mountPagedList({
       id: 'jwWorkerPager', mode: 'list', items: workers, perPage: 15,
-      placeholder: '🔍 Worker naam, mobile ya city search karein...',
-      getSearchText: (w) => `${w.name} ${w.phone || ''} ${w.city || ''} ${w.address || ''} ${w.gstin || ''}`,
+      placeholder: '🔍 Worker naam, mobile ya address search karein...',
+      getSearchText: (w) => `${w.name} ${w.phone || ''} ${w.city || ''} ${w.address || ''}`,
       renderRow: (w, gIdx, pageIdx) => {
         const p = pendList.find((x) => x.id === `${w.name}__${jwState.jwType.toUpperCase()}`);
         const pQty = p ? p.qty : 0;
-        const subInfo = isSwar
-          ? `${w.phone || ''} ${w.city ? '• ' + w.city : ''} ${w.transport ? '• ' + w.transport : ''} ${w.gstin ? '• GST: ' + w.gstin : ''}`
-          : `${w.phone || ''} ${w.address ? '• ' + w.address : ''}`;
         return `<div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickOutWorker(${w.id})">
-          <div><div>${gIdx + 1}. ${esc(w.name)}</div><small style="color:#64748b; font-weight:500;">${esc(subInfo.trim())}</small></div>
+          <div><div>${gIdx + 1}. ${esc(w.name)}</div><small style="color:#64748b; font-weight:500;">${esc(w.phone || '')} ${esc(w.city || w.address || '')}</small></div>
           <div style="display:flex; align-items:center; gap:6px;">
             <span class="badge" style="color:${pQty > 0 ? '#dc2626' : '#16a34a'};">Pending: ${pQty}</span>
             <button type="button" class="btn btn-light btn-sm" title="Edit Worker" onclick="event.stopPropagation(); editWorkerInline(${w.id}, 'out')">✏️</button>
@@ -506,62 +449,71 @@ async function renderJWOutward() {
     const jwUpper = jwState.jwType.toUpperCase();
     const wName = jwState.worker.name.toUpperCase();
     const isSwar = isSwarovskiType(jwUpper);
-    const rawWorkerLedger = (typeof dbGetByIndex === 'function')
-      ? await dbGetByIndex('jobWorkLedger', 'workerName', wName)
-      : (await dbGetAll('jobWorkLedger')).filter((l) => l.workerName === wName);
     const analytics = (typeof window.stxGetJWAnalytics === 'function')
       ? await window.stxGetJWAnalytics()
       : { outProgressMap: {}, inAllocMap: {} };
     const progMap = analytics.outProgressMap || {};
     const allocMap = analytics.inAllocMap || {};
 
-    const pbf = jwState.pbFilter;
-    const ledger = rawWorkerLedger
-      .filter((l) => l.jobWorkType === jwUpper && inDateRange(l.date, pbf.from, pbf.to))
+    const rawWorkerLedger = (typeof dbGetByIndex === 'function')
+      ? await dbGetByIndex('jobWorkLedger', 'workerName', wName)
+      : (await dbGetAll('jobWorkLedger')).filter((l) => l.workerName === wName);
+    const allLedger = rawWorkerLedger
+      .filter((l) => l.jobWorkType === jwUpper)
       .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
-    const pend = await dbGet('jobWorkPending', `${wName}__${jwUpper}`);
 
+    const ledger = allLedger.filter((l) => {
+      if (jwState.fromDate && (l.date || '') < jwState.fromDate) return false;
+      if (jwState.toDate && (l.date || '') > jwState.toDate) return false;
+      return true;
+    });
+
+    const pend = await dbGet('jobWorkPending', `${wName}__${jwUpper}`);
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
           <h2>📜 ${esc(wName)} (${esc(jwState.jwType)}) — Poora Khata</h2>
           <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
         </div>
+
         <div class="stx-filter-bar">
-          <div class="stx-f-item"><label>From Date</label><input type="date" value="${esc(pbf.from)}" onchange="jwState.pbFilter.from=this.value; resetPager('jwPassbookPager'); renderJWOutward();" /></div>
-          <div class="stx-f-item"><label>To Date</label><input type="date" value="${esc(pbf.to)}" onchange="jwState.pbFilter.to=this.value; resetPager('jwPassbookPager'); renderJWOutward();" /></div>
-          <button type="button" class="btn btn-light btn-sm" onclick="jwState.pbFilter={from:'',to:''}; resetPager('jwPassbookPager'); renderJWOutward();">Clear</button>
+          <div class="stx-f-item"><label>From Date</label><input type="date" value="${esc(jwState.fromDate)}" onchange="jwState.fromDate=this.value; resetPager('jwPassbookPager'); renderJWOutward();" /></div>
+          <div class="stx-f-item"><label>To Date</label><input type="date" value="${esc(jwState.toDate)}" onchange="jwState.toDate=this.value; resetPager('jwPassbookPager'); renderJWOutward();" /></div>
+          <button type="button" class="btn btn-light btn-sm" onclick="jwState.fromDate=''; jwState.toDate=''; resetPager('jwPassbookPager'); renderJWOutward();">Reset</button>
           <div style="margin-left:auto; background:#fef2f2; border:1px solid #fecaca; padding:7px 12px; border-radius:8px; font-size:13px;">
-            Total Pending: <b style="color:#dc2626; font-size:15px;">${pend ? pend.qty : 0} Pcs</b>
+            Abhi Pending: <b style="color:#dc2626; font-size:15px;">${pend ? pend.qty : 0} Pcs</b>
           </div>
         </div>
+
         <div id="jwPassbookPager"></div>
       </div>`;
+
     mountPagedList({
       id: 'jwPassbookPager', items: ledger, perPage: 15,
-      placeholder: '🔍 Date, Karigar, Bill No. ya Kaam search karein...',
-      headHtml: '<tr><th>Date / No.</th><th>Kaam</th><th>Karigar Detail</th><th>Pcs / Progress</th><th>Kya Kaam Hoga</th><th>Action</th></tr>',
+      placeholder: '🔍 Date, Karigar, No. ya Kaam search karein...',
+      headHtml: '<tr><th>Date / No.</th><th>Kaam</th><th>Karigar Detail</th><th>Pcs / Progress</th><th>Kya Kaam / Note</th><th>Action</th></tr>',
       getSearchText: (l) => `${l.date} ${l.jobWorkNo || ''} ${l.direction} ${Array.isArray(l.batchItems) ? l.batchItems.map((b) => b.bunkarName).join(' ') : ''} ${l.note || ''}`,
       renderRow: (l) => {
         const isOut = l.direction === 'OUT';
-        const prog = isOut ? progMap[l.id] : null;
+        const p = isOut ? (progMap[l.id] || { totalQty: l.qty, okQty: 0, damageQty: 0, pendingQty: l.qty }) : null;
         const allocs = !isOut ? (allocMap[l.id] || []) : [];
         const detail = isOut && Array.isArray(l.batchItems)
-          ? l.batchItems.map((b) => `${b.bunkarName === _JW_POOL ? 'POOL' : b.bunkarName} (${b.qty})`).join(', ')
-          : (allocs.length ? allocs.map((a) => `${a.bunkarName === _JW_POOL ? 'POOL' : a.bunkarName} (${a.qty})`).join(', ') : 'Wapsi Entry');
+          ? l.batchItems.map((b) => `<b>${esc(b.bunkarName === _JW_POOL ? 'POOL' : b.bunkarName)}</b> (${b.qty})`).join(', ')
+          : (allocs.length ? allocs.map((a) => `<b>${esc(a.bunkarName === _JW_POOL ? 'POOL' : a.bunkarName)}</b> (${a.qty})`).join(', ') : 'Wapsi Entry');
         const dmg = Number(l.damageQty) || 0;
-        const clickFn = isOut ? `editLedgerOut(${l.id}, 'PASSBOOK')` : `editLedgerIn(${l.id}, 'PASSBOOK')`;
-        return `<tr class="stx-row-click" onclick="${clickFn}">
-          <td style="white-space:nowrap;">${esc(l.date)}${l.jobWorkNo ? `<br/><small style="color:#64748b;">#${esc(l.jobWorkNo)}</small>` : ''}</td>
-          <td><b style="color:${isOut ? '#2563eb' : '#16a34a'};">${isOut ? '📤 Bheja' : '📥 Wapas'}</b></td>
-          <td><small>${esc(detail)}</small></td>
-          <td style="min-width:140px;">${isOut && prog ? renderProgressHtml(prog.okQty, prog.damageQty, prog.totalQty) : `<b style="color:#16a34a;">+${l.qty} Pcs</b>${dmg > 0 ? ` <small style="color:#dc2626;">(${dmg} Dmg)</small>` : ''}`}</td>
-          <td><small><b>${esc(l.note || '-')}</b></small></td>
-          <td style="white-space:nowrap;" onclick="event.stopPropagation()">
-            ${isOut && isSwar ? `<button class="btn btn-dark btn-sm" title="A5 Bill" onclick="printJobWorkBill(${l.id})">🖨️ Bill</button> <button class="btn btn-success btn-sm" title="Packing Slip" onclick="printJobWorkPackingSlip(${l.id})">📦 Slip</button>` : ''}
-            <button class="btn btn-light btn-sm" title="Edit" onclick="${clickFn}">✏️</button>
-            <button class="btn btn-danger btn-sm" title="Delete" onclick="reverseLedgerEntry(${l.id}, 'PASSBOOK')">🗑️</button>
-          </td></tr>`;
+        return `
+          <tr class="stx-row-click" onclick="${isOut ? `editLedgerOut(${l.id}, 'PASSBOOK')` : `editLedgerIn(${l.id}, 'PASSBOOK')`}">
+            <td style="white-space:nowrap;">${esc(l.date)}${l.jobWorkNo ? `<br/><small style="color:#64748b;">#${esc(l.jobWorkNo)}</small>` : ''}</td>
+            <td><b style="color:${isOut ? '#2563eb' : '#16a34a'};">${isOut ? '📤 Bheja' : '📥 Wapas'}</b></td>
+            <td><small>${detail}</small></td>
+            <td style="min-width:140px;">${isOut ? buildProgressCell(p.totalQty, p.okQty, p.damageQty, p.pendingQty) : `<b style="color:#16a34a;">-${l.qty} OK</b>${dmg > 0 ? `<br/><small style="color:#dc2626;">Dmg: ${dmg}</small>` : ''}`}</td>
+            <td><small><b>${esc(l.note || '-')}</b></small></td>
+            <td style="white-space:nowrap;" onclick="event.stopPropagation()">
+              ${isOut && isSwar ? `<button class="btn btn-dark btn-sm" title="A5 Bill" onclick="printJobWorkBill(${l.id})">🖨️ Bill</button> <button class="btn btn-success btn-sm" title="Packing Slip" onclick="printJobWorkPackingSlip(${l.id})">📦 Slip</button> ` : ''}
+              <button class="btn btn-light btn-sm" title="Edit" onclick="${isOut ? `editLedgerOut(${l.id}, 'PASSBOOK')` : `editLedgerIn(${l.id}, 'PASSBOOK')`}">✏️</button>
+              <button class="btn btn-danger btn-sm" title="Delete" onclick="reverseLedgerEntry(${l.id}, 'PASSBOOK')">🗑️</button>
+            </td>
+          </tr>`;
       },
       emptyHtml: '<tr><td colspan="6">Is worker ka abhi koi record nahi hai</td></tr>'
     });
@@ -573,7 +525,7 @@ async function renderJWOutward() {
     const stockMap = {};
     rawStocks.forEach((s) => { stockMap[s.bunkarName] = s.qty; });
     Object.keys(jwState.origQtyMap || {}).forEach((bName) => { stockMap[bName] = (stockMap[bName] || 0) + jwState.origQtyMap[bName]; });
-    const stocks = Object.keys(stockMap).filter((k) => stockMap[k] > 0).map((k) => ({ bunkarName: k, qty: stockMap[k] }));
+    const stocks = Object.keys(stockMap).filter((k) => stockMap[k] > 0).map((k) => ({ bunkarName: k, qty: stockMap[k] })).sort((a, b) => a.bunkarName.localeCompare(b.bunkarName));
     const firms = await dbGetAll('firms');
     const savedWorks = getSavedWorkDetails();
     const isSwar = isSwarovskiType(jwState.jwType);
@@ -585,9 +537,9 @@ async function renderJWOutward() {
         firmId: firms.length ? firms[0].id : '',
         jobWorkNo: nextJWNo,
         date: todayISO(),
-        transport: jwState.worker.transport || '',
-        destination: jwState.worker.city || '',
-        workerGstin: jwState.worker.gstin || '',
+        transport: isSwar ? (jwState.worker.transport || '') : '',
+        destination: isSwar ? (jwState.worker.city || '') : '',
+        workerGstin: isSwar ? (jwState.worker.gstin || '') : '',
         note: ''
       };
     }
@@ -601,26 +553,25 @@ async function renderJWOutward() {
           <div><label>Firm Chunein *</label><select id="batchFirmId" onchange="syncBatchMeta()">${firms.length ? firms.map((f) => `<option value="${f.id}" ${Number(m.firmId) === f.id ? 'selected' : ''}>${esc(f.name)} (${esc(f.shortCode)})</option>`).join('') : '<option value="">Settings me Firm add karein</option>'}</select></div>
           <div><label>Job Work No. *</label><input type="number" id="batchBillNo" value="${esc(m.jobWorkNo)}" onchange="syncBatchMeta()" /></div>
           <div><label>Dated *</label><input type="date" id="batchDate" value="${esc(m.date)}" onchange="syncBatchMeta()" /></div>
-          <div><label>Dispatched through (Transport)</label><input id="batchTransport" value="${esc(m.transport)}" placeholder="e.g. Kashi Express" onchange="syncBatchMeta()" /></div>
+          <div><label>Dispatched Through (Transport)</label><input id="batchTransport" value="${esc(m.transport)}" placeholder="e.g. Kashi Express" onchange="syncBatchMeta()" /></div>
           <div><label>Destination (City)</label><input id="batchDestination" value="${esc(m.destination)}" placeholder="e.g. SURAT / VARANASI" onchange="syncBatchMeta()" /></div>
-          <div><label>Worker GSTIN</label><input id="batchWorkerGst" value="${esc(m.workerGstin || '')}" placeholder="e.g. 24AA..." onchange="syncBatchMeta()" /></div>
-          <div style="grid-column: 1 / -1;"><label>✨ Kya Kaam / Design Hoga? *</label><input id="batchNote" list="jwWorkDetailList" value="${esc(m.note)}" placeholder="e.g. GAWATI ZARI CONTRAST ANCHAL" oninput="syncBatchMeta()" /><datalist id="jwWorkDetailList">${savedWorks.map((w) => `<option value="${esc(w)}">`).join('')}</datalist></div>
-        </div>
-      `
+          <div><label>Worker GSTIN</label><input id="batchWorkerGstin" value="${esc(m.workerGstin || '')}" placeholder="e.g. 24AA..." onchange="syncBatchMeta()" /></div>
+          <div style="grid-column:1 / -1;"><label>✨ Kya Kaam / Design Hoga? *</label><input id="batchNote" list="jwWorkDetailList" value="${esc(m.note)}" placeholder="e.g. GAWATI ZARI CONTRAST ANCHAL" oninput="syncBatchMeta()" /><datalist id="jwWorkDetailList">${savedWorks.map((w) => `<option value="${esc(w)}">`).join('')}</datalist></div>
+        </div>`
       : `
         <div class="grid-2" style="align-items:start;">
           <div><label>Dated *</label><input type="date" id="batchDate" value="${esc(m.date)}" onchange="syncBatchMeta()" /></div>
-          <div><label>Slip / Ref No. *</label><input type="number" id="batchBillNo" value="${esc(m.jobWorkNo)}" onchange="syncBatchMeta()" /></div>
-          <div style="grid-column: 1 / -1;"><label>✨ Kya Kaam / Design Hoga?</label><input id="batchNote" list="jwWorkDetailList" value="${esc(m.note)}" placeholder="e.g. CUTTING / JHALAR / CALENDER DETAIL" oninput="syncBatchMeta()" /><datalist id="jwWorkDetailList">${savedWorks.map((w) => `<option value="${esc(w)}">`).join('')}</datalist></div>
-        </div>
-      `;
+          <div><label>Ref / Slip No.</label><input type="number" id="batchBillNo" value="${esc(m.jobWorkNo)}" onchange="syncBatchMeta()" /></div>
+          <div style="grid-column:1 / -1;"><label>✨ Kya Kaam / Design Hoga?</label><input id="batchNote" list="jwWorkDetailList" value="${esc(m.note)}" placeholder="e.g. ${esc(jwState.jwType)} work" oninput="syncBatchMeta()" /><datalist id="jwWorkDetailList">${savedWorks.map((w) => `<option value="${esc(w)}">`).join('')}</datalist></div>
+        </div>`;
 
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
           <h2>${isEdit ? '✏️ Edit Job Work' : esc(jwState.jwType)} → ${esc(jwState.worker.name)} ${isEdit ? '(#' + esc(m.jobWorkNo) + ')' : ''}</h2>
-          <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            ${isEdit && isSwar ? `<button class="btn btn-dark btn-sm" onclick="printJobWorkBill(${jwState.editId})">🖨️ Print Bill</button><button class="btn btn-success btn-sm" onclick="printJobWorkPackingSlip(${jwState.editId})">📦 Packing Slip</button>` : ''}
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            ${isEdit && isSwar ? `<button class="btn btn-dark btn-sm" onclick="printJobWorkBill(${jwState.editId})">🖨️ Bill</button> <button class="btn btn-success btn-sm" onclick="printJobWorkPackingSlip(${jwState.editId})">📦 Slip</button>` : ''}
+            ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${jwState.editId}, '${esc(jwState.returnTo || 'OUT_LIST')}')">🗑️ Delete</button>` : ''}
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
@@ -630,18 +581,18 @@ async function renderJWOutward() {
       <div class="card">
         <div class="card-head">
           <h2>📦 Batch Me Karigar / Bunkar Saree Jodein</h2>
-          <span class="shortcut-hint">Enter = Aage</span>
+          <span class="shortcut-hint">Enter = Add</span>
         </div>
         <div class="stx-subpanel">
           <div class="grid-2" style="align-items:start;">
             <div><label>Karigar / Bunkar Naam *</label><input id="batchBunkarInput" list="batchBunkarList" placeholder="e.g. KARAN, ROHAN, FARHAN" /><datalist id="batchBunkarList">${stocks.map((s) => `<option value="${esc(s.bunkarName)}">${esc(s.bunkarName === _JW_POOL ? 'JOB WORK POOL' : s.bunkarName)} (${s.qty} Pcs)</option>`).join('')}</datalist></div>
-            <div><label>Quantity (Pcs) — Enter se Add</label><input type="number" id="batchQtyInput" min="1" placeholder="e.g. 16" data-custom-enter="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); addBatchRow(); }" /></div>
+            <div><label>Quantity (Pcs) — Enter se Add hoga</label><input type="number" id="batchQtyInput" min="1" placeholder="e.g. 10" data-custom-enter="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); addBatchRow(); }" /></div>
           </div>
           <button type="button" class="btn btn-dark btn-sm" style="margin-top:10px;" onclick="addBatchRow()">+ Add Line</button>
         </div>
 
         <div style="overflow-x:auto;">
-          <table><thead><tr><th>Sl No.</th><th>Karigar / Saree Name</th><th>Quantity</th><th>X</th></tr></thead>
+          <table><thead><tr><th>Sl No.</th><th>Karigar / Goods</th><th>Quantity</th><th>X</th></tr></thead>
             <tbody>${jwState.batchRows.map((r, i) => `<tr><td>${i + 1}</td><td><b>${esc(r.bunkarName === _JW_POOL ? 'JOB WORK POOL' : r.bunkarName)}</b></td><td><b>${r.qty}</b></td><td><button type="button" class="btn btn-danger btn-sm" onclick="removeBatchRow(${i})">X</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:#64748b;">Abhi batch khali hai... upar se add karein</td></tr>'}</tbody>
           </table>
         </div>
@@ -649,49 +600,46 @@ async function renderJWOutward() {
         <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; margin-top:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
           <div style="font-size:18px; font-weight:800;">TOTAL: <span style="color:#2563eb;">${totalBatch} Pcs</span></div>
           <button type="button" class="btn btn-success primary-save-btn" onclick="saveBatchOutward()">
-            ${isEdit ? '✅ Update Batch & Sync Stock (Ctrl+S)' : (isSwar ? '✅ Save & Print Bill / Packing Slip (Ctrl+S)' : '✅ Save Batch (Ctrl+S)')}
+            ${isEdit ? '✅ Update Batch & Sync Stock (Ctrl+S)' : (isSwar ? '✅ Save Batch & Print Bill / Slip (Ctrl+S)' : '✅ Save Job Work Outward (Ctrl+S)')}
           </button>
         </div>
       </div>`;
-    setTimeout(() => document.getElementById('batchNote')?.focus(), 50);
+    setTimeout(() => document.getElementById(isSwar ? 'batchNote' : 'batchBunkarInput')?.focus(), 50);
   }
 }
 
 function syncBatchMeta() {
   if (!jwState.meta) jwState.meta = {};
   const firmEl = document.getElementById('batchFirmId');
-  const billEl = document.getElementById('batchBillNo');
-  const dateEl = document.getElementById('batchDate');
   const transEl = document.getElementById('batchTransport');
   const destEl = document.getElementById('batchDestination');
-  const gstEl = document.getElementById('batchWorkerGst');
-  const noteEl = document.getElementById('batchNote');
-
+  const gstEl = document.getElementById('batchWorkerGstin');
   if (firmEl) jwState.meta.firmId = firmEl.value || '';
-  if (billEl) jwState.meta.jobWorkNo = billEl.value || '';
-  if (dateEl) jwState.meta.date = dateEl.value || todayISO();
+  jwState.meta.jobWorkNo = document.getElementById('batchBillNo')?.value || '';
+  jwState.meta.date = document.getElementById('batchDate')?.value || todayISO();
   if (transEl) jwState.meta.transport = transEl.value.trim();
   if (destEl) jwState.meta.destination = destEl.value.trim().toUpperCase();
   if (gstEl) jwState.meta.workerGstin = gstEl.value.trim().toUpperCase();
-  if (noteEl) jwState.meta.note = noteEl.value.trim().toUpperCase();
+  jwState.meta.note = document.getElementById('batchNote')?.value.trim().toUpperCase() || '';
 }
 
 function pickOutJWType(name) { jwState.jwType = name; jwState.step = 'WORKER'; resetPager('jwWorkerPager'); renderJWOutward(); }
 async function pickOutWorker(id) {
   jwState.worker = await dbGet('jobWorkers', id);
-  jwState.batchRows = []; jwState.meta = null; jwState.autoJobWorkNo = null; jwState.editId = null; jwState.origCreatedAt = null; jwState.origQtyMap = {}; jwState.returnStep = '';
+  jwState.batchRows = []; jwState.meta = null; jwState.autoJobWorkNo = null; jwState.editId = null; jwState.origCreatedAt = null; jwState.origQtyMap = {}; jwState.returnTo = '';
   jwState.step = 'BATCH'; renderJWOutward();
 }
 async function openWorkerPassbook(id) {
   jwState.worker = await dbGet('jobWorkers', id); jwState.step = 'PASSBOOK'; resetPager('jwPassbookPager'); renderJWOutward();
 }
 
-async function editLedgerOut(id, returnStep) {
+async function editLedgerOut(id, returnTo) {
   const entry = await dbGet('jobWorkLedger', id);
   if (!entry) return;
   const allWorkers = await dbGetAll('jobWorkers');
   const w = allWorkers.find((x) => x.name.toUpperCase() === entry.workerName) || {
-    name: entry.workerName, phone: entry.workerPhone || '', address: entry.workerAddress || '', city: entry.destination || '', transport: entry.transport || '', gstin: entry.workerGstin || ''
+    name: entry.workerName, phone: entry.workerPhone || '', address: entry.workerAddress || '',
+    city: entry.destination || '', transport: entry.transport || '', gstin: entry.workerGstin || ''
   };
   const origMap = {};
   (entry.batchItems || []).forEach((r) => { origMap[r.bunkarName] = (origMap[r.bunkarName] || 0) + (Number(r.qty) || 0); });
@@ -700,8 +648,8 @@ async function editLedgerOut(id, returnStep) {
   jwState.editId = entry.id;
   jwState.origCreatedAt = entry.createdAt;
   jwState.origQtyMap = origMap;
-  jwState.returnStep = returnStep || 'OUT_LIST';
   jwState.autoJobWorkNo = null;
+  jwState.returnTo = returnTo || 'PASSBOOK';
   jwState.batchRows = (entry.batchItems || []).map((r) => ({ bunkarName: r.bunkarName, qty: Number(r.qty) || 0 }));
   jwState.meta = {
     firmId: entry.firmId || '',
@@ -713,6 +661,7 @@ async function editLedgerOut(id, returnStep) {
     note: entry.note || ''
   };
   jwState.step = 'BATCH';
+  switchTabSectionOnly('tab-jobwork');
   renderJWOutward();
 }
 
@@ -749,10 +698,12 @@ async function saveNewWorker(mode) {
     const name = document.getElementById('newWName' + pfx).value.trim().toUpperCase();
     const phone = document.getElementById('newWPhone' + pfx).value.trim();
     const address = document.getElementById('newWAddr' + pfx).value.trim();
-    const city = (document.getElementById('newWCity' + pfx)?.value || '').trim().toUpperCase();
-    const transport = (document.getElementById('newWTrans' + pfx)?.value || '').trim();
-    const gstin = (document.getElementById('newWGst' + pfx)?.value || '').trim().toUpperCase();
     const jwType = mode === 'out' ? jwState.jwType : inState.jwType;
+    const isSwar = isSwarovskiType(jwType);
+    const city = isSwar ? (document.getElementById('newWCity' + pfx)?.value || '').trim().toUpperCase() : '';
+    const transport = isSwar ? (document.getElementById('newWTrans' + pfx)?.value || '').trim() : '';
+    const gstin = isSwar ? (document.getElementById('newWGst' + pfx)?.value || '').trim().toUpperCase() : '';
+
     if (!name) return jwNotify('Worker ka naam zaroori hai!', 'warn');
     const payload = { name, phone, address, city, transport, gstin, jobWorkType: jwType.toUpperCase() };
     if (editIdVal) payload.id = Number(editIdVal);
@@ -767,7 +718,7 @@ async function addJobWorkTypePrompt(mode) {
     window.stxOpenModal({
       title: '+ Naya Job Work Add Karein',
       bodyHtml: `
-        <label>Kaam ka naam likhein (e.g. Cutting, Calender, Embroidery, Jhalar, Swarovski)</label>
+        <label>Kaam ka naam likhein (e.g. Cutting, Calender, Swarovski)</label>
         <input id="stxNewJWTypeInput" placeholder="e.g. Cutting"
                onkeydown="if(event.key==='Enter'){ event.preventDefault(); document.getElementById('stxSaveJWTypeBtn')?.click(); }" />
       `,
@@ -855,10 +806,10 @@ async function saveBatchOutward() {
       workerPhone: jwState.worker.phone || '',
       workerAddress: jwState.worker.address || '',
       workerGstin: isSwar ? (m.workerGstin || jwState.worker.gstin || '') : '',
-      firmId: isSwar ? m.firmId : '',
+      firmId: m.firmId || '',
       jobWorkNo: m.jobWorkNo,
-      transport: isSwar ? m.transport : '',
-      destination: isSwar ? m.destination : '',
+      transport: isSwar ? (m.transport || '') : '',
+      destination: isSwar ? (m.destination || '') : '',
       qty: totalQty,
       batchItems: jwState.batchRows,
       date: m.date,
@@ -871,27 +822,27 @@ async function saveBatchOutward() {
     if (typeof refreshDashboard === 'function') await refreshDashboard();
 
     const wasEdit = !!jwState.editId;
-    const retTarget = jwState.returnStep || 'PASSBOOK';
+    const retTarget = jwState.returnTo || 'PASSBOOK';
     const savedNo = m.jobWorkNo;
+
     if (wasEdit) {
-      jwState.step = retTarget;
-      jwState.editId = null; jwState.origQtyMap = {}; jwState.meta = null; jwState.autoJobWorkNo = null; jwState.returnStep = '';
+      jwState.step = retTarget; jwState.editId = null; jwState.origQtyMap = {}; jwState.meta = null; jwState.autoJobWorkNo = null; jwState.batchRows = []; jwState.returnTo = '';
     } else {
       jwState = {
-        ...jwState,
-        step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, autoJobWorkNo: null, editId: null, origCreatedAt: null, origQtyMap: {}, returnStep: ''
+        step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, autoJobWorkNo: null,
+        editId: null, origCreatedAt: null, origQtyMap: {}, fromDate: '', toDate: '', filterType: 'ALL', filterWorker: 'ALL', returnTo: ''
       };
     }
     await renderJWOutward();
 
-    // Sirf Swarovski me Bill + Packing Slip print modal khulega; baaki job work me no bill headache!
+    // Bill + Packing Slip SIRF Swarovski ke liye!
     if (isSwar && typeof window.stxOpenModal === 'function') {
       window.stxOpenModal({
         title: `💎 Swarovski #${savedNo} ${wasEdit ? 'Update' : 'Save'} Ho Gaya!`,
         bodyHtml: `<div style="font-size:14px;"><b>${esc(workerName)}</b> — <b>${totalQty} Pcs</b></div><p style="margin-top:6px;">Bill aur Packing Slip dono yahan se print kar sakte hain:</p>`,
         buttons: [
           { label: '🖨️ Print A5 Bill', className: 'btn btn-dark', onClick: () => { stxCloseModal(); printJobWorkBill(ledgerId); } },
-          { label: '📦 Packing Slip', className: 'btn btn-success', onClick: () => { stxCloseModal(); printJobWorkPackingSlip(ledgerId); } },
+          { label: '📦 Print Packing Slip', className: 'btn btn-success', onClick: () => { stxCloseModal(); printJobWorkPackingSlip(ledgerId); } },
           { label: 'Done', className: 'btn btn-light', onClick: () => stxCloseModal() }
         ]
       });
@@ -901,6 +852,7 @@ async function saveBatchOutward() {
   } catch (err) { jwNotify('Save Error: ' + err.message, 'error'); }
 }
 
+// === SWAROVSKI PRINT 1: A5 LANDSCAPE JOB WORK BILL ===
 async function printJobWorkBill(ledgerId) {
   const l = await dbGet('jobWorkLedger', ledgerId);
   if (!l) return;
@@ -912,8 +864,18 @@ async function printJobWorkBill(ledgerId) {
       <table style="width:100%; border-collapse:collapse; border:1.5px solid #000; font-size:11.5px;">
         <tr>
           <td style="width:55%; vertical-align:top; padding:0; border:1px solid #000;">
-            <div style="padding:6px 8px; border-bottom:1px solid #000;"><div style="font-size:14px; font-weight:800;">${esc(firm.name)}</div><div>${esc(firm.address || '')}</div>${firm.phone ? `<div>Mob. No. ${esc(firm.phone)}</div>` : ''}${firm.gstin ? `<div>GSTIN: ${esc(firm.gstin)}</div>` : ''}</div>
-            <div style="padding:6px 8px;"><div style="font-size:13px; font-weight:800;">${esc(l.workerName)}</div><div>${esc(l.workerAddress || l.destination || '')}</div>${l.workerPhone ? `<div>Contact: ${esc(l.workerPhone)}</div>` : ''}${l.workerGstin ? `<div><b>GSTIN: ${esc(l.workerGstin)}</b></div>` : ''}</div>
+            <div style="padding:6px 8px; border-bottom:1px solid #000;">
+              <div style="font-size:14px; font-weight:800;">${esc(firm.name)}</div>
+              <div>${esc(firm.address || '')}</div>
+              ${firm.phone ? `<div>Mob. No. ${esc(firm.phone)}</div>` : ''}
+              ${firm.gstin ? `<div>GSTIN: ${esc(firm.gstin)}</div>` : ''}
+            </div>
+            <div style="padding:6px 8px;">
+              <div style="font-size:13px; font-weight:800;">${esc(l.workerName)}</div>
+              <div>${esc(l.workerAddress || l.destination || '')}</div>
+              ${l.workerPhone ? `<div>Contact: ${esc(l.workerPhone)}</div>` : ''}
+              ${l.workerGstin ? `<div>GSTIN: ${esc(l.workerGstin)}</div>` : ''}
+            </div>
           </td>
           <td style="width:45%; vertical-align:top; padding:0; border:1px solid #000;">
             <table style="width:100%; border-collapse:collapse; height:100%; font-size:11.5px;">
@@ -939,6 +901,7 @@ async function printJobWorkBill(ledgerId) {
   setTimeout(() => window.print(), 150);
 }
 
+// === SWAROVSKI PRINT 2: A5 PORTRAIT PACKING SLIP ===
 async function printJobWorkPackingSlip(ledgerId) {
   const l = await dbGet('jobWorkLedger', ledgerId);
   if (!l) return;
@@ -948,52 +911,47 @@ async function printJobWorkPackingSlip(ledgerId) {
     <div style="width:100%; min-height:185mm; border:3px solid #000; padding:12px; box-sizing:border-box; font-family:Arial,sans-serif; display:flex; flex-direction:column; justify-content:space-between; color:#000;">
       <div>
         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2.5px solid #000; padding-bottom:8px;">
-          <div style="font-size:19px; font-weight:900; letter-spacing:0.6px;">JOB WORK PACKING SLIP</div>
-          <div style="text-align:right; font-size:13px; font-weight:800;">
-            <div>JW #: ${esc(l.jobWorkNo || l.id)}</div>
-            <div>Date: ${esc(formatDMY(l.date))}</div>
-          </div>
+          <div style="font-size:18px; font-weight:900; letter-spacing:0.8px;">JOB WORK PACKING SLIP</div>
+          <div style="font-size:13px; font-weight:800;">Date: ${esc(formatDMY(l.date))}</div>
         </div>
-
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:10px 0; border-bottom:2px dashed #000; font-size:13px;">
-          <div><small style="font-weight:700; color:#444;">KAAM / WORK</small><br/><b style="font-size:16px;">${esc(l.jobWorkType)}</b></div>
-          <div style="text-align:right;"><small style="font-weight:700; color:#444;">DESTINATION</small><br/><b style="font-size:16px;">${esc(l.destination || '-')}</b></div>
-          <div><small style="font-weight:700; color:#444;">KARIGAR / WORKER</small><br/><b style="font-size:14px;">${esc(l.workerName)}</b></div>
-          <div style="text-align:right;"><small style="font-weight:700; color:#444;">TRANSPORT</small><br/><b style="font-size:14px;">${esc(l.transport || '-')}</b></div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; border-bottom:2px dashed #000; padding-bottom:8px; font-size:13px;">
+          <div><b>JW No.:</b> #${esc(l.jobWorkNo || l.id)}</div>
+          <div style="text-align:right;"><b>Kaam:</b> ${esc(l.jobWorkType)}</div>
+          <div><b>Destination:</b> ${esc(l.destination || '-')}</div>
+          <div style="text-align:right;"><b>Transport:</b> ${esc(l.transport || '-')}</div>
         </div>
-
         <table style="width:100%; border-collapse:collapse; margin-top:10px; font-size:13px;">
           <thead>
             <tr style="background:#f3f4f6;">
-              <th style="border:1.5px solid #000; padding:6px; text-align:center; width:12%;">S.No</th>
-              <th style="border:1.5px solid #000; padding:6px;">Saree / Karigar</th>
-              <th style="border:1.5px solid #000; padding:6px; text-align:center; width:22%;">Qty (Pcs)</th>
-              <th style="border:1.5px solid #000; padding:6px; text-align:center; width:14%;">Chk</th>
+              <th style="border:1.5px solid #000; padding:6px; width:12%; text-align:center;">Sl</th>
+              <th style="border:1.5px solid #000; padding:6px; text-align:left;">Karigar / Goods</th>
+              <th style="border:1.5px solid #000; padding:6px; width:22%; text-align:center;">Qty (Pcs)</th>
+              <th style="border:1.5px solid #000; padding:6px; width:14%; text-align:center;">Check</th>
             </tr>
           </thead>
           <tbody>
             ${items.map((it, i) => `
               <tr>
-                <td style="border:1.5px solid #000; padding:6px; text-align:center;">${i + 1}</td>
-                <td style="border:1.5px solid #000; padding:6px; font-weight:800;">${esc(it.bunkarName === _JW_POOL ? 'JOB WORK POOL' : it.bunkarName)}</td>
-                <td style="border:1.5px solid #000; padding:6px; text-align:center; font-weight:900; font-size:14px;">${it.qty}</td>
-                <td style="border:1.5px solid #000; padding:6px; text-align:center;">[ &nbsp; ]</td>
-              </tr>
-            `).join('')}
+                <td style="border:1px solid #000; padding:6px; text-align:center;">${i + 1}</td>
+                <td style="border:1px solid #000; padding:6px; font-weight:800;">${esc(it.bunkarName === _JW_POOL ? 'JOB WORK POOL' : it.bunkarName)}</td>
+                <td style="border:1px solid #000; padding:6px; text-align:center; font-weight:800;">${it.qty}</td>
+                <td style="border:1px solid #000; padding:6px; text-align:center;">☐</td>
+              </tr>`).join('')}
           </tbody>
         </table>
-        ${l.note ? `<div style="margin-top:10px; border:1.5px solid #000; padding:7px; text-align:center; font-weight:900; font-size:14px;">KAAM: ${esc(l.note)}</div>` : ''}
       </div>
-
-      <div style="display:flex; justify-content:space-between; align-items:center; border-top:3px solid #000; padding-top:10px; margin-top:14px; font-size:19px; font-weight:900;">
-        <div>TOTAL SAREE: ${l.qty} PCS</div>
-        <div style="font-size:13px;">Checked By: _________</div>
+      <div>
+        ${l.note ? `<div style="border:1.5px dashed #000; padding:8px; text-align:center; font-weight:900; font-size:14px; margin-bottom:10px;">WORK: ${esc(l.note)}</div>` : ''}
+        <div style="display:flex; justify-content:space-between; align-items:center; border-top:2.5px solid #000; padding-top:8px; font-size:18px; font-weight:900;">
+          <div>TOTAL PCS: ${l.qty}</div>
+          <div>ITEMS: ${items.length}</div>
+        </div>
       </div>
     </div>`;
   setTimeout(() => window.print(), 150);
 }
 
-// === MODULE 2: STOCK INWARD & KARIGAR-WISE JW WAPSI ===
+// === MODULE 2: STOCK INWARD ===
 async function renderStockInward() {
   await openDB();
   const box = document.getElementById('tab-inward');
@@ -1004,12 +962,12 @@ async function renderStockInward() {
       <div class="card">
         <div class="card-head">
           <h2>2. Stock Inward — Maal Kahan se Aaya?</h2>
-          <button class="btn btn-dark btn-sm" onclick="inState.step='HISTORY'; resetPager('inwardHistPager'); renderStockInward();">📜 Inward / Wapsi List (${inCount})</button>
+          <button class="btn btn-primary btn-sm" onclick="inState.step='HISTORY'; resetPager('inwardHistPager'); renderStockInward();">📋 Aane Wali List (${inCount})</button>
         </div>
         <div class="list-menu kbd-list">
           <div class="list-row kbd-active" data-key="1" onclick="inState.step='DIRECT'; inState.editId=null; inState.editOrig=null; renderStockInward();"><span>1. Direct Baithak se Aayi (Karigar / Bunkar ke Naam se)</span><span class="badge">Key: 1</span></div>
-          <div class="list-row" data-key="2" onclick="inState.step='JW_TYPE'; inState.editId=null; inState.editOrig=null; resetPager('inJWTypePager'); renderStockInward();"><span>2. Job Work se Wapas Aayi (Total Pcs Entry + Auto Karigar & Barcode)</span><span class="badge">Key: 2</span></div>
-          <div class="list-row" data-key="3" onclick="inState.step='HISTORY'; resetPager('inwardHistPager'); renderStockInward();"><span>3. 📋 Inward / Wapsi List (Date Filter & Click-to-Open)</span><span class="badge">Key: 3</span></div>
+          <div class="list-row" data-key="2" onclick="inState.step='JW_TYPE'; inState.editId=null; inState.editOrig=null; resetPager('inJWTypePager'); renderStockInward();"><span>2. Job Work se Wapas Aayi (Total Pcs Entry + Auto Karigar Wapsi)</span><span class="badge">Key: 2</span></div>
+          <div class="list-row" data-key="3" onclick="inState.step='HISTORY'; resetPager('inwardHistPager'); renderStockInward();"><span>3. 📋 Inward / Job Work Wapsi List (Date Filter)</span><span class="badge">Key: 3</span></div>
         </div>
       </div>`;
     return;
@@ -1019,63 +977,61 @@ async function renderStockInward() {
     const allInRaw = (typeof dbGetByIndex === 'function')
       ? await dbGetByIndex('jobWorkLedger', 'direction', 'IN')
       : (await dbGetAll('jobWorkLedger')).filter((l) => l.direction === 'IN');
+    const allInSorted = allInRaw.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
 
     const analytics = (typeof window.stxGetJWAnalytics === 'function')
       ? await window.stxGetJWAnalytics()
       : { inAllocMap: {} };
     const allocMap = analytics.inAllocMap || {};
 
-    const hf = inState.histFilter;
-    const allIn = allInRaw
-      .filter((l) => {
-        if (!inDateRange(l.date, hf.from, hf.to)) return false;
-        const isDirect = l.jobWorkType === 'DIRECT_BAITHAK';
-        if (hf.source === 'DIRECT' && !isDirect) return false;
-        if (hf.source === 'JW' && isDirect) return false;
-        return true;
-      })
-      .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
+    const filtered = allInSorted.filter((l) => {
+      if (inState.fromDate && (l.date || '') < inState.fromDate) return false;
+      if (inState.toDate && (l.date || '') > inState.toDate) return false;
+      if (inState.filterSource === 'DIRECT' && l.jobWorkType !== 'DIRECT_BAITHAK') return false;
+      if (inState.filterSource === 'JW' && l.jobWorkType === 'DIRECT_BAITHAK') return false;
+      return true;
+    });
 
-    const sumOk = allIn.reduce((s, l) => s + (Number(l.qty) || 0), 0);
-    const sumDmg = allIn.reduce((s, l) => s + (Number(l.damageQty) || 0), 0);
+    let sumOk = 0, sumDmg = 0;
+    filtered.forEach((l) => { sumOk += Number(l.qty) || 0; sumDmg += Number(l.damageQty) || 0; });
 
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>📜 Stock Inward & Job Work Wapsi List (${allIn.length})</h2>
+          <h2>📋 Stock Inward & Job Work Wapsi List (${filtered.length})</h2>
           <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
         </div>
 
         <div class="stx-filter-bar">
-          <div class="stx-f-item"><label>From Date</label><input type="date" value="${esc(hf.from)}" onchange="inState.histFilter.from=this.value; resetPager('inwardHistPager'); renderStockInward();" /></div>
-          <div class="stx-f-item"><label>To Date</label><input type="date" value="${esc(hf.to)}" onchange="inState.histFilter.to=this.value; resetPager('inwardHistPager'); renderStockInward();" /></div>
+          <div class="stx-f-item"><label>From Date</label><input type="date" value="${esc(inState.fromDate)}" onchange="inState.fromDate=this.value; resetPager('inwardHistPager'); renderStockInward();" /></div>
+          <div class="stx-f-item"><label>To Date</label><input type="date" value="${esc(inState.toDate)}" onchange="inState.toDate=this.value; resetPager('inwardHistPager'); renderStockInward();" /></div>
           <div class="stx-f-item">
-            <label>Source Filter</label>
-            <select onchange="inState.histFilter.source=this.value; resetPager('inwardHistPager'); renderStockInward();">
-              <option value="ALL" ${hf.source === 'ALL' ? 'selected' : ''}>Sabhi (Baithak + JW Wapsi)</option>
-              <option value="JW" ${hf.source === 'JW' ? 'selected' : ''}>Sirf Job Work Wapsi</option>
-              <option value="DIRECT" ${hf.source === 'DIRECT' ? 'selected' : ''}>Sirf Direct Baithak</option>
+            <label>Source</label>
+            <select onchange="inState.filterSource=this.value; resetPager('inwardHistPager'); renderStockInward();">
+              <option value="ALL" ${inState.filterSource === 'ALL' ? 'selected' : ''}>Sabhi (Baithak + JW)</option>
+              <option value="JW" ${inState.filterSource === 'JW' ? 'selected' : ''}>Sirf Job Work Wapsi</option>
+              <option value="DIRECT" ${inState.filterSource === 'DIRECT' ? 'selected' : ''}>Sirf Direct Baithak</option>
             </select>
           </div>
-          <button type="button" class="btn btn-light btn-sm" onclick="inState.histFilter={from:'',to:'',source:'ALL'}; resetPager('inwardHistPager'); renderStockInward();">Clear Filter</button>
+          <button type="button" class="btn btn-light btn-sm" onclick="inState.fromDate=''; inState.toDate=''; inState.filterSource='ALL'; resetPager('inwardHistPager'); renderStockInward();">Reset</button>
         </div>
 
         <div class="stx-summary-strip">
-          <div class="stx-summary-pill"><small>Total Entries</small><b>${allIn.length}</b></div>
-          <div class="stx-summary-pill"><small>Total Wapas OK</small><b style="color:#16a34a;">+${sumOk} Pcs</b></div>
-          <div class="stx-summary-pill"><small>Damage / Shortage</small><b style="color:#dc2626;">${sumDmg} Pcs</b></div>
+          <div class="stx-summary-pill"><small>Entries</small><b>${filtered.length}</b></div>
+          <div class="stx-summary-pill"><small>Total OK Wapas</small><b style="color:#16a34a;">+${sumOk} Pcs</b></div>
+          <div class="stx-summary-pill"><small>Damage / Short</small><b style="color:#dc2626;">${sumDmg} Pcs</b></div>
         </div>
 
-        <div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:8px;">
-          💡 Kisi bhi entry par <b>Click</b> karne par uska Form khul jayega!
+        <div style="font-size:12px; color:#475569; margin-bottom:8px; font-weight:600;">
+          💡 Kisi bhi row par <b>click karne par uska Form</b> khul jayega (Edit / View ke liye).
         </div>
-
         <div id="inwardHistPager"></div>
       </div>`;
+
     mountPagedList({
-      id: 'inwardHistPager', items: allIn, perPage: 15,
-      placeholder: '🔍 Date, Karigar, Worker ya Note search karein...',
-      headHtml: '<tr><th>Date</th><th>Source</th><th>Karigar Breakdown</th><th>OK / Dmg</th><th>Note</th><th>Action</th></tr>',
+      id: 'inwardHistPager', items: filtered, perPage: 15,
+      placeholder: '🔍 Date, Karigar, Worker, Kaam ya Note search karein...',
+      headHtml: '<tr><th>Date</th><th>Source</th><th>Worker / Kaam</th><th>Karigar Saree Detail</th><th>OK / Dmg</th><th>Note</th><th>Action</th></tr>',
       getSearchText: (l) => {
         const allocs = (allocMap[l.id] || []).map((a) => `${a.bunkarName} ${a.qty}`).join(' ');
         return `${l.date} ${l.jobWorkType} ${l.bunkarName || ''} ${l.workerName || ''} ${allocs} ${l.note || ''}`;
@@ -1083,25 +1039,25 @@ async function renderStockInward() {
       renderRow: (l) => {
         const isDirect = l.jobWorkType === 'DIRECT_BAITHAK';
         const allocs = !isDirect ? (allocMap[l.id] || []) : [];
-        const karigarHtml = isDirect
-          ? `<b>${esc(l.bunkarName)}</b>`
-          : (allocs.length
-              ? allocs.map((a) => `<b>${esc(a.bunkarName === _JW_POOL ? 'POOL' : a.bunkarName)}</b> - ${a.qty} pcs`).join(', ')
-              : `<b>${esc(l.workerName)}</b>`);
+        const karigarTxt = isDirect
+          ? `<b>${esc(l.bunkarName)}</b> (${l.qty})`
+          : (allocs.length ? allocs.map((a) => `<b>${esc(a.bunkarName === _JW_POOL ? 'POOL' : a.bunkarName)}</b> - ${a.qty} pcs`).join(', ') : '-');
         const dmg = Number(l.damageQty) || 0;
-        return `<tr class="stx-row-click" onclick="editLedgerIn(${l.id}, 'INWARD_HIST')">
-          <td style="white-space:nowrap;"><b>${esc(l.date)}</b></td>
-          <td><b>${isDirect ? '🏠 Baithak' : '🧵 ' + esc(l.jobWorkType)}</b>${!isDirect ? `<br/><small style="color:#64748b;">${esc(l.workerName)}</small>` : ''}</td>
-          <td><small>${karigarHtml}</small></td>
-          <td><b style="color:#16a34a;">+${l.qty} Pcs</b>${dmg > 0 ? `<br/><small style="color:#dc2626; font-weight:700;">Dmg: ${dmg}</small>` : ''}</td>
-          <td><small>${esc(l.note || '-')}</small></td>
-          <td style="white-space:nowrap;" onclick="event.stopPropagation()">
-            <button class="btn btn-light btn-sm" title="Edit Form" onclick="editLedgerIn(${l.id}, 'INWARD_HIST')">✏️</button>
-            <button class="btn btn-danger btn-sm" title="Delete" onclick="reverseLedgerEntry(${l.id}, 'INWARD_HIST')">🗑️</button>
-          </td>
-        </tr>`;
+        return `
+          <tr class="stx-row-click" onclick="editLedgerIn(${l.id}, 'INWARD_HIST')">
+            <td style="white-space:nowrap;"><b>${esc(l.date)}</b></td>
+            <td><b>${isDirect ? '🏠 Baithak' : '🧵 ' + esc(l.jobWorkType)}</b></td>
+            <td><b>${esc(isDirect ? l.bunkarName : l.workerName)}</b></td>
+            <td><small>${karigarTxt}</small></td>
+            <td style="white-space:nowrap;"><b style="color:#16a34a;">+${l.qty} OK</b>${dmg > 0 ? `<br/><small style="color:#dc2626; font-weight:700;">Dmg: ${dmg}</small>` : ''}</td>
+            <td><small>${esc(l.note || '-')}</small></td>
+            <td style="white-space:nowrap;" onclick="event.stopPropagation()">
+              <button class="btn btn-light btn-sm" title="Edit" onclick="editLedgerIn(${l.id}, 'INWARD_HIST')">✏️</button>
+              <button class="btn btn-danger btn-sm" title="Delete" onclick="reverseLedgerEntry(${l.id}, 'INWARD_HIST')">🗑️</button>
+            </td>
+          </tr>`;
       },
-      emptyHtml: '<tr><td colspan="6">Koi record nahi mila</td></tr>'
+      emptyHtml: '<tr><td colspan="7">Koi record nahi mila</td></tr>'
     });
     return;
   }
@@ -1111,10 +1067,16 @@ async function renderStockInward() {
     const orig = inState.editOrig, isEdit = !!inState.editId;
     box.innerHTML = `
       <div class="card">
-        <div class="card-head"><h2>${isEdit ? '✏️ Edit Direct Baithak Inward' : 'Direct Baithak se Stock Inward'}</h2><button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button></div>
+        <div class="card-head">
+          <h2>${isEdit ? '✏️ Edit Direct Baithak Inward' : 'Direct Baithak se Stock Inward'}</h2>
+          <div style="display:flex; gap:6px;">
+            ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${inState.editId}, 'INWARD_HIST')">🗑️ Delete</button>` : ''}
+            <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+          </div>
+        </div>
         <div class="grid-2" style="align-items:start;">
-          <div><label>Date</label><input type="date" id="dirDate" value="${esc(orig ? orig.date : todayISO())}" /></div>
-          <div><label>Saree (Karigar / Bunkar Naam) *</label><input id="dirBunkar" list="dirBunkarList" value="${esc(orig ? orig.bunkarName : '')}" placeholder="e.g. FARHAN, KARAN" /><datalist id="dirBunkarList">${names.map((n) => `<option value="${esc(n.bunkarName)}">`).join('')}</datalist></div>
+          <div><label>Date *</label><input type="date" id="dirDate" value="${esc(orig ? orig.date : todayISO())}" /></div>
+          <div><label>Karigar / Bunkar Naam *</label><input id="dirBunkar" list="dirBunkarList" value="${esc(orig ? orig.bunkarName : '')}" placeholder="e.g. FARHAN, KARAN" /><datalist id="dirBunkarList">${names.map((n) => `<option value="${esc(n.bunkarName)}">`).join('')}</datalist></div>
           <div><label>Quantity (Pcs) *</label><input type="number" id="dirQty" min="1" value="${orig ? orig.qty : ''}" placeholder="e.g. 50" /></div>
           <div><label>Note (Optional)</label><input id="dirNote" value="${esc(orig ? (orig.note || '') : '')}" placeholder="e.g. Kora maal" data-custom-enter="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveDirectInward(); }" /></div>
         </div>
@@ -1140,19 +1102,23 @@ async function renderStockInward() {
     const pendList = await dbGetAll('jobWorkPending');
     box.innerHTML = `
       <div class="card">
-        <div class="card-head"><h2>${esc(inState.jwType)} Wapsi — Worker Chunein</h2><div><button class="btn btn-success btn-sm" onclick="showAddWorkerModal('in')">+ Naya Worker</button><button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button></div></div>
-        <div id="addWorkerInlineIn" class="stx-subpanel hidden">
-          ${buildWorkerFormHtml(inState.jwType, 'In')}
+        <div class="card-head">
+          <h2>${esc(inState.jwType)} Wapsi — Worker Chunein</h2>
+          <div><button class="btn btn-success btn-sm" onclick="showAddWorkerModal('in')">+ Naya Worker</button><button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button></div>
         </div>
+        ${buildWorkerFormHtml('in', inState.jwType)}
         <div id="inWorkerPager"></div>
       </div>`;
     mountPagedList({
       id: 'inWorkerPager', mode: 'list', items: workers, perPage: 15, placeholder: '🔍 Worker search karein...',
-      getSearchText: (w) => `${w.name} ${w.phone || ''} ${w.city || ''}`,
+      getSearchText: (w) => `${w.name} ${w.phone || ''} ${w.city || ''} ${w.address || ''}`,
       renderRow: (w, gIdx, pageIdx) => {
         const p = pendList.find((x) => x.id === `${w.name}__${inState.jwType.toUpperCase()}`);
         const pQty = p ? p.qty : 0;
-        return `<div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickInWorker(${w.id})"><span>${gIdx + 1}. ${esc(w.name)}</span><div style="display:flex; align-items:center; gap:6px;"><span class="badge" style="color:${pQty > 0 ? '#dc2626' : '#16a34a'};">Pending: ${pQty} Pcs</span><button type="button" class="btn btn-light btn-sm" onclick="event.stopPropagation(); editWorkerInline(${w.id}, 'in')">✏️</button></div></div>`;
+        return `<div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickInWorker(${w.id})">
+          <div><div>${gIdx + 1}. ${esc(w.name)}</div><small style="color:#64748b;">${esc(w.phone || '')} ${esc(w.address || w.city || '')}</small></div>
+          <div style="display:flex; align-items:center; gap:6px;"><span class="badge" style="color:${pQty > 0 ? '#dc2626' : '#16a34a'};">Pending: ${pQty} Pcs</span><button type="button" class="btn btn-light btn-sm" onclick="event.stopPropagation(); editWorkerInline(${w.id}, 'in')">✏️</button></div>
+        </div>`;
       },
       emptyHtml: '<p style="color:#64748b; font-size:13px;">Koi worker nahi mila.</p>'
     });
@@ -1161,115 +1127,128 @@ async function renderStockInward() {
 
   if (inState.step === 'JW_RETURN') {
     const jwUpper = inState.jwType.toUpperCase();
-    const wUpper = inState.worker.name.toUpperCase();
-    const pendId = `${wUpper}__${jwUpper}`;
+    const wName = inState.worker.name.toUpperCase();
+    const pendId = `${wName}__${jwUpper}`;
     const orig = inState.editOrig, isEdit = !!inState.editId;
 
     let opening = null;
     try { opening = JSON.parse(localStorage.getItem('simplitex_opening_stock') || 'null'); } catch (_) {}
     const allLedger = await dbGetAll('jobWorkLedger');
-    const simLedger = isEdit ? allLedger.filter((x) => x.id !== inState.editId) : allLedger;
-    const simAnalytics = (typeof window.stxComputeJWAnalytics === 'function')
-      ? window.stxComputeJWAnalytics(opening, simLedger)
+    const baseLedger = isEdit ? allLedger.filter((x) => x.id !== inState.editId) : allLedger;
+    const baseAnalytics = (typeof window.stxComputeJWAnalytics === 'function')
+      ? window.stxComputeJWAnalytics(opening, baseLedger)
       : { pendingMap: {}, workerQueueMap: {}, outProgressMap: {} };
 
-    const pendQty = Math.max(0, simAnalytics.pendingMap[pendId]?.qty || 0);
-    const openBatches = allLedger
-      .filter((l) => l.direction === 'OUT' && String(l.workerName || '').toUpperCase() === wUpper && String(l.jobWorkType || '').toUpperCase() === jwUpper)
-      .map((l) => ({ l, prog: simAnalytics.outProgressMap[l.id] }))
-      .filter((x) => x.prog && x.prog.pendingQty > 0)
-      .sort((a, b) => (a.l.date || '').localeCompare(b.l.date || ''));
+    const pendQty = Math.max(0, (baseAnalytics.pendingMap[pendId]?.qty || 0));
+    const queue = (baseAnalytics.workerQueueMap[pendId] || []).filter((q) => q.remQty > 0);
+    const openOutBatches = allLedger
+      .filter((l) => l.direction === 'OUT' && l.workerName === wName && l.jobWorkType === jwUpper && baseAnalytics.outProgressMap[l.id] && baseAnalytics.outProgressMap[l.id].pendingQty > 0)
+      .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.createdAt || 0) - (b.createdAt || 0));
 
-    window._stxSimJWQueue = (simAnalytics.workerQueueMap[pendId] || []).map((q) => ({ bunkarName: q.bunkarName, remQty: q.remQty }));
+    const queueSum = queue.reduce((s, q) => s + q.remQty, 0);
+    _jwReturnSimCache = {
+      queue: queue.map((q) => ({ bunkarName: q.bunkarName, remQty: q.remQty })),
+      openingRem: Math.max(0, pendQty - queueSum),
+      karigarMap: getKarigarMapSafe()
+    };
 
-    const batchesHtml = openBatches.length
-      ? `
-        <div class="stx-subpanel" style="margin-bottom:14px;">
-          <div style="font-size:12px; font-weight:800; color:#334155; margin-bottom:6px;">
-            📦 Is Karigar par Baki Batches (${openBatches.length}):
-          </div>
-          ${openBatches.map(({ l, prog }) => `
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 0; border-bottom:1px dashed #cbd5e1; font-size:12px;">
-              <div><b>${esc(l.date)}</b> ${l.jobWorkNo ? `(#${esc(l.jobWorkNo)})` : ''} — ${prog.items.map((it) => `${esc(it.bunkarName)}: <b>${it.pendingQty}</b>/${it.sentQty}`).join(', ')}</div>
-              <div style="min-width:130px;">${renderProgressHtml(prog.okQty, prog.damageQty, prog.totalQty)}</div>
-            </div>
-          `).join('')}
+    const batchesHtml = openOutBatches.length ? `
+      <div class="stx-subpanel" style="margin-bottom:14px;">
+        <div style="font-size:12px; font-weight:800; color:#1e3a8a; margin-bottom:6px;">📦 Open Outward Batches (FIFO — Purane pehle adjust honge):</div>
+        <div style="overflow-x:auto;">
+          <table style="font-size:12px;">
+            <thead><tr><th>Date</th><th>Karigars</th><th>Progress</th></tr></thead>
+            <tbody>
+              ${openOutBatches.map((b) => {
+                const p = baseAnalytics.outProgressMap[b.id];
+                const kTxt = (p.items || []).filter((x) => x.pendingQty > 0).map((x) => `<b>${esc(x.bunkarName)}</b> (${x.pendingQty}/${x.sentQty})`).join(', ');
+                return `<tr><td style="white-space:nowrap;">${esc(b.date)}</td><td><small>${kTxt}</small></td><td style="min-width:150px;">${buildProgressCell(p.totalQty, p.okQty, p.damageQty, p.pendingQty)}</td></tr>`;
+              }).join('')}
+            </tbody>
+          </table>
         </div>
-      `
-      : '';
+      </div>` : '';
 
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
           <h2>${isEdit ? '✏️ Edit Wapsi:' : ''} ${esc(inState.jwType)} → ${esc(inState.worker.name)} (Wapsi)</h2>
-          <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+          <div style="display:flex; gap:6px;">
+            ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${inState.editId}, '${esc(inState.returnTo || 'INWARD_HIST')}')">🗑️ Delete</button>` : ''}
+            <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+          </div>
         </div>
 
-        <div style="background:#fef2f2; border:1px solid #fecaca; padding:12px 14px; border-radius:10px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
-          <span style="font-size:14px; font-weight:700;">Is Worker par Total Pending:</span>
-          <b style="color:#dc2626; font-size:20px;">${pendQty} Pcs</b>
+        <div style="background:#fef2f2; border:1px solid #fecaca; padding:12px 14px; border-radius:10px; margin-bottom:12px; font-size:15px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <span>Is Karigar par Total Pending:</span>
+          <b style="color:#dc2626; font-size:18px;">${pendQty} Pcs</b>
         </div>
 
         ${batchesHtml}
 
         <div class="grid-2" style="align-items:start;">
           <div><label>Date *</label><input type="date" id="jwRetDate" value="${esc(orig ? orig.date : todayISO())}" /></div>
-          <div><label>OK Saree Wapas Aayi (Total Pcs) *</label><input type="number" id="jwRetQty" min="0" value="${isEdit && orig ? orig.qty : (pendQty > 0 ? pendQty : '')}" placeholder="e.g. 20" oninput="previewJWReturnAlloc()" /></div>
-          <div><label>Damage / Shortage (Pcs — Optional)</label><input type="number" id="jwRetDamage" min="0" value="${isEdit && orig ? (orig.damageQty || 0) : 0}" placeholder="0" oninput="previewJWReturnAlloc()" /></div>
+          <div><label>OK Saree Wapas Aayi (Pcs) *</label><input type="number" id="jwRetQty" min="0" value="${isEdit && orig ? orig.qty : (pendQty > 0 ? pendQty : '')}" placeholder="e.g. 20" oninput="updateJWReturnPreview()" /></div>
+          <div><label>Damage / Shortage (Pcs)</label><input type="number" id="jwRetDamage" min="0" value="${isEdit && orig ? (orig.damageQty || 0) : 0}" placeholder="0" oninput="updateJWReturnPreview()" /></div>
           <div><label>Note (Optional)</label><input id="jwRetNote" value="${esc(orig ? (orig.note || '') : '')}" placeholder="e.g. Ok checked" data-custom-enter="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveJWReturnInward(); }" /></div>
         </div>
 
-        <div id="jwRetPreviewBox" style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:11px 13px; margin-top:12px; font-size:12.5px; color:#1e3a8a;"></div>
+        <div id="jwRetPreviewBox" style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:11px 13px; margin-top:12px; font-size:12.5px;"></div>
 
         <button class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%; height:44px;" onclick="saveJWReturnInward()">
-          ${isEdit ? '✅ Update Wapsi & Sync Stock (Ctrl+S)' : '✅ Wapsi Save Karein (Karigar + Auto Barcode Sync)'}
+          ${isEdit ? '✅ Update Wapsi & Sync Stock (Ctrl+S)' : '✅ Wapsi Save Karein (Auto Karigar Stock + Barcode)'}
         </button>
       </div>`;
 
-    previewJWReturnAlloc();
+    updateJWReturnPreview();
     setTimeout(() => { const el = document.getElementById('jwRetQty'); if (el) { el.focus(); el.select(); } }, 50);
   }
 }
 
-function previewJWReturnAlloc() {
+function updateJWReturnPreview() {
   const box = document.getElementById('jwRetPreviewBox');
   if (!box) return;
   const okQty = Math.max(0, parseInt(document.getElementById('jwRetQty')?.value, 10) || 0);
   const dmgQty = Math.max(0, parseInt(document.getElementById('jwRetDamage')?.value, 10) || 0);
 
-  if (okQty === 0 && dmgQty === 0) {
-    box.innerHTML = 'ℹ️ Wapas aane wali <b>Total Pcs</b> daalein — software khud Karigar ke naam par stock save kar dega.';
+  if (okQty + dmgQty <= 0) {
+    box.innerHTML = `<span style="color:#64748b;">Upar <b>OK Wapsi Pcs</b> daalein — software khud dikhayega kis Karigar ki kitni saree wapas save hogi.</span>`;
     return;
   }
 
-  const queue = (window._stxSimJWQueue || []).map((x) => ({ ...x }));
-  const allocMap = {};
   let okLeft = okQty;
-
-  for (let i = 0; i < queue.length && okLeft > 0; i++) {
-    if (queue[i].remQty <= 0) continue;
-    const take = Math.min(queue[i].remQty, okLeft);
-    queue[i].remQty -= take;
-    okLeft -= take;
-    allocMap[queue[i].bunkarName] = (allocMap[queue[i].bunkarName] || 0) + take;
+  if (_jwReturnSimCache.openingRem > 0 && okLeft > 0) {
+    const usedOpen = Math.min(_jwReturnSimCache.openingRem, okLeft);
+    okLeft -= usedOpen;
   }
-  if (okLeft > 0) allocMap[_JW_POOL] = (allocMap[_JW_POOL] || 0) + okLeft;
 
-  const kdMap = getKarigarDesignMapClean();
-  const parts = Object.keys(allocMap).map((kName) => {
-    const q = allocMap[kName];
-    const disp = kName === _JW_POOL ? 'JW POOL' : kName;
-    const mapped = kdMap[kName.toUpperCase()];
-    if (mapped && mapped.auto) {
-      return `<b>${esc(disp)} - ${q} pcs</b> <span class="stx-pill stx-pill-ok">⚡ Auto-Convert → ${esc(mapped.designName)}</span>`;
+  const allocs = [];
+  for (const q of _jwReturnSimCache.queue) {
+    if (okLeft <= 0) break;
+    const take = Math.min(q.remQty, okLeft);
+    if (take > 0) {
+      okLeft -= take;
+      const ex = allocs.find((a) => a.bunkarName === q.bunkarName);
+      if (ex) ex.qty += take;
+      else allocs.push({ bunkarName: q.bunkarName, qty: take });
     }
-    return `<b>${esc(disp)} - ${q} pcs</b> <span class="stx-pill stx-pill-info">Karigar Stock</span>`;
-  });
+  }
+  if (okLeft > 0) allocs.push({ bunkarName: _JW_POOL, qty: okLeft });
+
+  const kMap = _jwReturnSimCache.karigarMap || {};
+  const lines = allocs.map((a) => {
+    const name = a.bunkarName === _JW_POOL ? 'POOL' : a.bunkarName;
+    const mapped = a.bunkarName !== _JW_POOL ? kMap[a.bunkarName.toUpperCase()] : null;
+    if (mapped && mapped.auto) {
+      return `<div>✅ <b>${esc(name)}</b>: +${a.qty} Pcs &nbsp;→&nbsp; <span class="stx-pill stx-pill-info">⚡ Auto-Convert: ${esc(mapped.designName)}</span></div>`;
+    }
+    return `<div>✅ <b>${esc(name)}</b>: +${a.qty} Pcs &nbsp;→&nbsp; <span class="stx-pill stx-pill-warn">Karigar Stock me save hogi</span></div>`;
+  }).join('');
 
   box.innerHTML = `
-    <div style="font-weight:800; margin-bottom:4px;">🔮 Automatic Karigar Wapsi Breakdown:</div>
-    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">${parts.join(' &nbsp;|&nbsp; ')}</div>
-    ${dmgQty > 0 ? `<div style="margin-top:5px; color:#b91c1c; font-weight:700;">⚠️ Damage / Shortage: ${dmgQty} Pcs (Pending se kam honge, stock me nahi judenge)</div>` : ''}
+    <div style="font-weight:800; color:#1e3a8a; margin-bottom:4px;">📋 Wapsi Breakdown Preview:</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">${lines}</div>
+    ${dmgQty > 0 ? `<div style="margin-top:5px; color:#dc2626; font-weight:700;">⚠️ Damage / Shortage: ${dmgQty} Pcs (Pending se kam hoga, stock me nahi judega)</div>` : ''}
   `;
 }
 
@@ -1315,11 +1294,10 @@ async function saveDirectInward() {
 
 async function deleteAutoConvertLogsForJwIn(jwInId) {
   if (!jwInId) return;
-  const logs = await dbGetAll('barcodingLogs');
-  for (const b of logs) {
-    if (b && b.autoFromJwInId === jwInId) {
-      await dbDelete('barcodingLogs', b.id);
-    }
+  const allLogs = await dbGetAll('barcodingLogs');
+  const linked = allLogs.filter((b) => Number(b.autoFromJwInId) === Number(jwInId));
+  for (const log of linked) {
+    await dbDelete('barcodingLogs', log.id);
   }
 }
 
@@ -1329,23 +1307,19 @@ async function saveJWReturnInward() {
     const qty = Math.max(0, parseInt(document.getElementById('jwRetQty').value, 10) || 0);
     const damageQty = Math.max(0, parseInt(document.getElementById('jwRetDamage')?.value, 10) || 0);
     const note = document.getElementById('jwRetNote').value.trim();
-    const jwUpper = inState.jwType.toUpperCase(), workerName = inState.worker.name.toUpperCase();
+    const jwUpper = inState.jwType.toUpperCase();
+    const workerName = inState.worker.name.toUpperCase();
 
-    if (qty <= 0 && damageQty <= 0) return jwNotify('Kam se kam OK Pcs ya Damage Pcs daalein!', 'warn');
+    if (qty + damageQty <= 0) return jwNotify('OK Pcs ya Damage Pcs me se kam se kam 1 daalein!', 'warn');
 
     const pend = await dbGet('jobWorkPending', `${workerName}__${jwUpper}`);
     const isEdit = !!inState.editId;
-    const origCleared = (isEdit && inState.editOrig)
+    const prevCleared = isEdit && inState.editOrig
       ? ((Number(inState.editOrig.qty) || 0) + (Number(inState.editOrig.damageQty) || 0))
       : 0;
-    const pendQty = (pend ? pend.qty : 0) + origCleared;
-    const totalEntered = qty + damageQty;
+    const pendQty = (pend ? pend.qty : 0) + prevCleared;
 
-    if (totalEntered > pendQty && !confirm(`${workerName} par sirf ${pendQty} Pcs pending hai. Phir bhi ${totalEntered} Pcs enter karna hai?`)) return;
-
-    if (isEdit) {
-      await deleteAutoConvertLogsForJwIn(inState.editId);
-    }
+    if (qty + damageQty > pendQty && !confirm(`${workerName} par sirf ${pendQty} Pcs pending hai. Phir bhi ${qty} OK + ${damageQty} Dmg enter karna hai?`)) return;
 
     const record = {
       direction: 'IN',
@@ -1360,19 +1334,21 @@ async function saveJWReturnInward() {
     if (inState.editId) record.id = inState.editId;
     const savedId = await dbPut('jobWorkLedger', record);
 
-    // Compute Karigar-wise allocations for this Wapsi entry & Auto-Convert mapped Karigars!
+    // Purane auto-convert logs saaf karke naye Karigar breakdown ke hisab se auto-convert banayein
+    await deleteAutoConvertLogsForJwIn(savedId);
+
     const analytics = (typeof window.stxGetJWAnalytics === 'function')
       ? await window.stxGetJWAnalytics()
       : { inAllocMap: {} };
     const allocs = (analytics.inAllocMap && analytics.inAllocMap[savedId]) || [];
-    const kdMap = getKarigarDesignMapClean();
+    const karigarMap = getKarigarMapSafe();
 
     const autoConvertedItems = [];
     const unmappedItems = [];
 
     for (const a of allocs) {
-      if (!a || !a.bunkarName || a.bunkarName === _JW_POOL) continue;
-      const mapped = kdMap[a.bunkarName.toUpperCase()];
+      if (!a || !a.qty || a.bunkarName === _JW_POOL) continue;
+      const mapped = karigarMap[a.bunkarName.toUpperCase()];
       if (mapped && mapped.auto && mapped.designName) {
         const exDes = await dbGet('designs', mapped.designName);
         const specLine = mapped.specLine || (exDes ? exDes.specLine : '') || '';
@@ -1410,8 +1386,8 @@ async function saveJWReturnInward() {
 
     const totalAutoPcs = autoConvertedItems.reduce((s, x) => s + x.qty, 0);
     if (autoConvertedItems.length && typeof window.stxOpenModal === 'function') {
-      const autoHtml = autoConvertedItems.map((x) => `<li>⚡ <b>${esc(x.sourceName)} (${x.qty} Pcs)</b> → Auto-Converted to Design <b>${esc(x.designName)}</b></li>`).join('');
-      const unmapHtml = unmappedItems.map((x) => `<li>⏳ <b>${esc(x.sourceName)} (${x.qty} Pcs)</b> — New Karigar (1 baar "Stock Convert" me Design set karein)</li>`).join('');
+      const autoHtml = autoConvertedItems.map((x) => `<li>⚡ <b>${esc(x.sourceName)}</b> (${x.qty} Pcs) → Auto-Convert <b>${esc(x.designName)}</b></li>`).join('');
+      const unmapHtml = unmappedItems.map((x) => `<li>⏳ <b>${esc(x.sourceName)}</b> (${x.qty} Pcs) — New Karigar (1 baar Stock Convert karein)</li>`).join('');
       window.stxOpenModal({
         title: `✅ ${workerName} Wapsi Save + Auto Barcode Ready!`,
         bodyHtml: `
@@ -1455,6 +1431,8 @@ async function reverseLedgerEntry(id, returnTo) {
       if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
       if (typeof refreshDashboard === 'function') await refreshDashboard();
       jwNotify('Entry delete ho gayi & stock sync hua', 'info');
+      if (jwState.editId === id) { jwState.editId = null; jwState.meta = null; jwState.batchRows = []; jwState.step = returnTo === 'PASSBOOK' ? 'PASSBOOK' : 'OUT_LIST'; }
+      if (inState.editId === id) { inState.editId = null; inState.editOrig = null; inState.step = 'HISTORY'; }
       (returnTo === 'PASSBOOK' || returnTo === 'OUT_LIST') ? renderJWOutward() : renderStockInward();
     };
 
