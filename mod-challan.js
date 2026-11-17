@@ -1,4 +1,4 @@
-// === SimpliTex Module 5 & 6 v3: Challan & A5 Packing Slip (Edit + Auto Stock Engine + Aligned + Pending Tracker) ===
+// === SimpliTex Module 5 & 6 v4: Challan & A5 Packing Slip (Edit + Auto Stock Engine + Aligned + Pending Tracker + Multi-PC Guard) ===
 
 let challanState = {
   view: 'FORM',
@@ -9,7 +9,8 @@ let challanState = {
   allChallans: [],
   editId: null,
   origChallan: null,
-  draft: null
+  draft: null,
+  autoChallanNo: null
 };
 
 if (!window.stxComputeOrderStatus) {
@@ -52,6 +53,7 @@ window.onTabChanged = function (tabId) {
     challanState.editId = null;
     challanState.origChallan = null;
     challanState.draft = null;
+    challanState.autoChallanNo = null;
     challanState.items = [];
     renderChallanModule();
   }
@@ -66,6 +68,7 @@ window.handleModuleEscape = function () {
       challanState.editId = null;
       challanState.origChallan = null;
       challanState.draft = null;
+      challanState.autoChallanNo = null;
       challanState.items = [];
       challanState.view = 'LIST';
       renderChallanModule();
@@ -106,7 +109,7 @@ async function renderChallanModule() {
         <div class="card-head">
           <h2>📜 Saved Challans (${challans.length})</h2>
           <div>
-            <button class="btn btn-dark btn-sm" onclick="challanState.view='FORM'; challanState.items=[]; challanState.linkedOrderNo=''; challanState.loadedParty=''; challanState.editId=null; challanState.origChallan=null; challanState.draft=null; renderChallanModule();">+ Naya Challan</button>
+            <button class="btn btn-dark btn-sm" onclick="challanState.view='FORM'; challanState.items=[]; challanState.linkedOrderNo=''; challanState.loadedParty=''; challanState.editId=null; challanState.origChallan=null; challanState.draft=null; challanState.autoChallanNo=null; renderChallanModule();">+ Naya Challan</button>
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
@@ -171,6 +174,7 @@ async function renderChallanModule() {
     totalChallansCount = allChallans.length;
     nextChNo = allChallans.length ? Math.max(...allChallans.map((c) => Number(c.challanNo) || 0)) + 1 : 1;
   }
+  challanState.autoChallanNo = isEdit ? null : nextChNo;
 
   box.innerHTML = `
     <div class="card">
@@ -291,6 +295,7 @@ async function editChallanById(id) {
   if (!c) return;
   challanState.editId = c.id;
   challanState.origChallan = c;
+  challanState.autoChallanNo = null;
   challanState.items = (c.items || []).map((it) => ({ ...it }));
   challanState.linkedOrderNo = c.orderNo || '';
   challanState.draft = {
@@ -639,7 +644,7 @@ function renderChallanItemsTable() {
 async function saveChallanForm() {
   try {
     const firmId = Number(document.getElementById('chFirmId').value);
-    const challanNo = parseInt(document.getElementById('chNo').value, 10);
+    let challanNo = parseInt(document.getElementById('chNo').value, 10);
     const date = document.getElementById('chDate').value || todayISO();
     const partyName = document.getElementById('chPartyName').value.trim().toUpperCase();
     const partyCity = document.getElementById('chPartyCity').value.trim().toUpperCase();
@@ -654,6 +659,15 @@ async function saveChallanForm() {
     if (!challanState.items.length) return alert('Kam se kam 1 Saree add karein!');
 
     const isEdit = !!(challanState.editId && challanState.origChallan);
+
+    // Multi-PC Guard: Agar auto Challan No. kisi aur PC par use ho gaya ho toh fresh number lein
+    if (!isEdit && challanState.autoChallanNo !== null && challanNo === challanState.autoChallanNo) {
+      const existingSame = await dbGetByIndex('challans', 'challanNo', challanNo);
+      if (existingSame && existingSame.length > 0) {
+        challanNo = (await dbGetMaxField('challans', 'challanNo')) + 1;
+      }
+    }
+
     const origQtyMap = {};
     if (isEdit) {
       (challanState.origChallan.items || []).forEach((it) => {
@@ -724,6 +738,7 @@ async function saveChallanForm() {
     challanState.editId = null;
     challanState.origChallan = null;
     challanState.draft = null;
+    challanState.autoChallanNo = null;
     if (isEdit) challanState.view = 'LIST';
     await renderChallanModule();
 
