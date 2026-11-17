@@ -1,9 +1,118 @@
-// === SimpliTex Core App v6 (Tally Loader + 4-Stage Stock Drilldown + Auto Stock Audit + Year Closing + LAN Live Sync) ===
+// === SimpliTex Core App v7 (Pro Dashboard + Auto Error Recovery + Toast/Modal Kit + Pending Reports + Party Master + LAN Sync) ===
 const MASTER_SECRET = 'SIMPLITEX_MAU_2026_SECRET';
 const JW_POOL_KEY = '__JW_POOL__';
 let stockTabMode = 'BUNKAR'; // 'BUNKAR' | 'CONVERTED' | 'JW_WAPSI' | 'BARCODE'
+let reportTabMode = 'ORDERS'; // 'ORDERS' | 'KARIGAR'
 
-// 0. TALLY-STYLE COMPANY LOADING SCREEN
+function stxEsc(str) {
+  return String(str || '').replace(/[&<>"']/g, (m) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[m]));
+}
+
+function stxTodayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// === GLOBAL AUTO ERROR HANDLER (Enterprise Crash Protection) ===
+window._stxErrorLog = window._stxErrorLog || [];
+
+function stxRecordError(errMsg, source) {
+  const msg = String(errMsg || 'Unknown error');
+  if (msg.includes('ResizeObserver loop')) return;
+  window._stxErrorLog.unshift({ time: new Date().toLocaleTimeString(), source, msg });
+  if (window._stxErrorLog.length > 25) window._stxErrorLog.pop();
+  console.error(`[SimpliTex AutoGuard:${source}]`, msg);
+
+  // Agar Tally loader atka ho toh turant hata dein taaki screen lock na ho
+  const loader = document.getElementById('stxTallyLoader');
+  if (loader && !loader.classList.contains('hidden')) {
+    hideTallyLoader(true);
+  }
+  stxToast('⚠️ Ek technical rukawat aayi par app safe hai: ' + msg.slice(0, 90), 'error', 4200);
+}
+
+window.addEventListener('error', (ev) => {
+  if (ev && ev.message) stxRecordError(ev.message, 'runtime');
+});
+
+window.addEventListener('unhandledrejection', (ev) => {
+  const reason = ev && ev.reason ? (ev.reason.message || String(ev.reason)) : 'Promise rejected';
+  stxRecordError(reason, 'async');
+});
+
+// === IN-APP TOAST & MODAL UI KIT ===
+function stxToast(msg, type = 'info', durationMs = 2800) {
+  if (!document.body) return;
+  let wrap = document.getElementById('stxToastWrap');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'stxToastWrap';
+    document.body.appendChild(wrap);
+  }
+  const t = document.createElement('div');
+  t.className = `stx-toast ${type}`;
+  const span = document.createElement('span');
+  span.textContent = msg;
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'background:transparent; border:none; color:#cbd5e1; cursor:pointer; font-weight:800; font-size:13px; padding:0 2px;';
+  closeBtn.onclick = () => t.remove();
+
+  t.appendChild(span);
+  t.appendChild(closeBtn);
+  wrap.appendChild(t);
+
+  setTimeout(() => {
+    try { t.remove(); } catch (_) {}
+  }, durationMs);
+}
+window.stxToast = stxToast;
+
+function stxCloseModal() {
+  const el = document.getElementById('stxModalBackdrop');
+  if (el) el.remove();
+}
+window.stxCloseModal = stxCloseModal;
+
+function stxOpenModal({ title = 'Info', bodyHtml = '', buttons = [] }) {
+  stxCloseModal();
+  const backdrop = document.createElement('div');
+  backdrop.id = 'stxModalBackdrop';
+  backdrop.onclick = (e) => {
+    if (e.target === backdrop) stxCloseModal();
+  };
+
+  const modal = document.createElement('div');
+  modal.className = 'stx-modal';
+  modal.innerHTML = `<h3>${stxEsc(title)}</h3><div id="stxModalBody">${bodyHtml}</div><div class="stx-modal-actions" id="stxModalActions"></div>`;
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  const actEl = document.getElementById('stxModalActions');
+  (buttons || []).forEach((b) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = b.className || 'btn btn-light';
+    btn.textContent = b.label || 'OK';
+    btn.onclick = () => {
+      if (typeof b.onClick === 'function') b.onClick(modal);
+      else stxCloseModal();
+    };
+    actEl.appendChild(btn);
+  });
+
+  setTimeout(() => {
+    const firstInput = modal.querySelector('input, select, button');
+    if (firstInput) firstInput.focus();
+  }, 30);
+  return modal;
+}
+window.stxOpenModal = stxOpenModal;
+
+// === 0. TALLY-STYLE COMPANY LOADING SCREEN ===
 function ensureTallyLoader() {
   let el = document.getElementById('stxTallyLoader');
   if (el) return el;
@@ -12,27 +121,27 @@ function ensureTallyLoader() {
   el.id = 'stxTallyLoader';
   el.style.cssText = [
     'position:fixed', 'inset:0', 'z-index:99999',
-    'background:#0b0d12', 'color:#f9fafb',
+    'background:#0f172a', 'color:#f8fafc',
     'display:flex', 'align-items:center', 'justify-content:center',
     'padding:20px', 'font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif',
-    'transition:opacity 0.28s ease'
+    'transition:opacity 0.25s ease'
   ].join(';');
 
   el.innerHTML = `
-    <div style="width:100%; max-width:400px; background:#111827; border:1px solid #374151; border-radius:14px; padding:26px 22px; text-align:center; box-shadow:0 20px 50px rgba(0,0,0,0.6);">
-      <img src="./icon-192.png" alt="SimpliTex" style="width:64px; height:64px; border-radius:14px; margin-bottom:10px; border:1px solid #374151;" />
+    <div style="width:100%; max-width:400px; background:#1e293b; border:1px solid #334155; border-radius:16px; padding:26px 22px; text-align:center; box-shadow:0 20px 50px rgba(0,0,0,0.6);">
+      <img src="./icon-192.png" alt="SimpliTex" style="width:64px; height:64px; border-radius:14px; margin-bottom:10px; border:1px solid #475569;" />
       <div style="font-size:22px; font-weight:800; letter-spacing:0.5px;">SimpliTex ERP</div>
       <div id="stxLoadCompany" style="font-size:13px; color:#fbbf24; font-weight:700; margin-top:4px; min-height:18px;">
         Loading Company...
       </div>
 
-      <div style="background:#1f2937; border-radius:999px; height:10px; overflow:hidden; margin:18px 0 8px; border:1px solid #374151;">
+      <div style="background:#0f172a; border-radius:999px; height:10px; overflow:hidden; margin:18px 0 8px; border:1px solid #334155;">
         <div id="stxLoadBar" style="width:10%; height:100%; background:linear-gradient(90deg,#22c55e,#4ade80); transition:width 0.25s ease;"></div>
       </div>
 
-      <div style="display:flex; justify-content:space-between; font-size:12px; color:#9ca3af;">
+      <div style="display:flex; justify-content:space-between; font-size:12px; color:#94a3b8;">
         <span id="stxLoadMsg">Starting SimpliTex...</span>
-        <b id="stxLoadPct" style="color:#f9fafb;">10%</b>
+        <b id="stxLoadPct" style="color:#f8fafc;">10%</b>
       </div>
     </div>
   `;
@@ -73,7 +182,7 @@ function hideTallyLoader(immediate) {
   setTimeout(() => {
     el.style.display = 'none';
     el.classList.add('hidden');
-  }, 280);
+  }, 260);
 }
 
 function sleepMs(ms) {
@@ -84,7 +193,7 @@ if (document.body) {
   showTallyLoader('Initializing Company...', 'Starting SimpliTex...', 10);
 }
 
-// 1. Pure JS Signature (100% Offline)
+// === 1. PURE JS SIGNATURE (100% OFFLINE) ===
 function makeSignature(text) {
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
   const full = text + '|' + MASTER_SECRET;
@@ -98,8 +207,8 @@ function makeSignature(text) {
   return ((h2 >>> 0).toString(36) + (h1 >>> 0).toString(36)).toUpperCase().slice(0, 6);
 }
 
-function getTodayYMD() {
-  const d = new Date();
+function getTodayYMD(refMs) {
+  const d = refMs ? new Date(refMs) : new Date();
   return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
 }
 
@@ -108,9 +217,10 @@ function addDaysYMD(days) {
   return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
 }
 
-// 2. License & Anti-Date-Cheat (Payment Lock)
+// === 2. LICENSE & ANTI-DATE-CHEAT (Multi-PC Clock Safe) ===
 function getOrCreateLicense() {
-  let lic = JSON.parse(localStorage.getItem('simplitex_license') || 'null');
+  let lic = null;
+  try { lic = JSON.parse(localStorage.getItem('simplitex_license') || 'null'); } catch (_) {}
   if (!lic) {
     const rand = Math.random().toString(36).substring(2, 8).toUpperCase();
     lic = { deviceId: 'STX-' + rand, expiryYMD: addDaysYMD(15), lastSeenMs: Date.now() };
@@ -121,24 +231,33 @@ function getOrCreateLicense() {
 
 function checkLicense() {
   const lic = getOrCreateLicense();
-  const now = Date.now();
-  const today = getTodayYMD();
+  const isLan = typeof window.stxIsLanMode === 'function' && window.stxIsLanMode();
+  const srvTime = (isLan && window.STX_LAN_INFO && window.STX_LAN_INFO.serverTime) ? Number(window.STX_LAN_INFO.serverTime) : null;
+  const now = srvTime || Date.now();
+  const today = getTodayYMD(now);
 
-  if (now < lic.lastSeenMs - 3600000) {
+  if (now < (lic.lastSeenMs || 0) - 3600000) {
     showLockScreen(lic.deviceId, 'Device ki Date/Time galat hai! Sahi karein ya Unlock Code daalein.');
     return false;
   }
-  lic.lastSeenMs = now;
-  localStorage.setItem('simplitex_license', JSON.stringify(lic));
+
+  // LAN mode me client PC ki galat clock ko shared license me na likhein
+  if (!isLan || srvTime) {
+    lic.lastSeenMs = now;
+    localStorage.setItem('simplitex_license', JSON.stringify(lic));
+  }
 
   if (today > lic.expiryYMD) {
     showLockScreen(lic.deviceId, 'Monthly Plan khatam ho gaya hai. Admin se Unlock Code lein.');
     return false;
   }
 
-  document.getElementById('expiryPill').textContent = 'Valid: ' + lic.expiryYMD;
-  document.getElementById('settingsDeviceId').textContent = lic.deviceId;
-  document.getElementById('settingsExpiry').textContent = lic.expiryYMD;
+  const expEl = document.getElementById('expiryPill');
+  const devEl = document.getElementById('settingsDeviceId');
+  const setExpEl = document.getElementById('settingsExpiry');
+  if (expEl) expEl.textContent = 'Valid: ' + lic.expiryYMD;
+  if (devEl) devEl.textContent = lic.deviceId;
+  if (setExpEl) setExpEl.textContent = lic.expiryYMD;
   return true;
 }
 
@@ -152,23 +271,23 @@ function applyUnlockCode() {
   const lic = getOrCreateLicense();
   const raw = document.getElementById('unlockCodeInput').value.trim().toUpperCase();
   const parts = raw.split('-');
-  if (parts.length !== 2 || parts[0].length !== 8) return alert('Format: YYYYMMDD-XXXXXX');
+  if (parts.length !== 2 || parts[0].length !== 8) return stxToast('Format: YYYYMMDD-XXXXXX', 'warn');
   const [ymdStr, sig] = parts;
   const expected = makeSignature(lic.deviceId + '|' + ymdStr);
   const ymdNum = parseInt(ymdStr, 10);
 
   if (sig !== expected || isNaN(ymdNum) || ymdNum < getTodayYMD()) {
-    return alert('Invalid ya Expired Code!');
+    return stxToast('Invalid ya Expired Code!', 'error');
   }
   lic.expiryYMD = ymdNum;
   lic.lastSeenMs = Date.now();
   localStorage.setItem('simplitex_license', JSON.stringify(lic));
   document.getElementById('lockScreen').classList.add('hidden');
-  alert('Unlocked! Valid till: ' + ymdNum);
+  stxToast('✅ App Unlocked! Valid till: ' + ymdNum, 'success');
   initApp();
 }
 
-// 3. UNIVERSAL SEARCH & 15-ROW PAGINATION ENGINE
+// === 3. UNIVERSAL SEARCH & 15-ROW PAGINATION ENGINE ===
 window._stxPagerState = window._stxPagerState || {};
 window._stxPagerConfigs = window._stxPagerConfigs || {};
 
@@ -238,7 +357,7 @@ function drawPagedBody(id) {
 
   if (opts.mode === 'list') {
     bodyEl.innerHTML = `<div class="list-menu kbd-list">${
-      slice.length ? slice.map((item, idx) => opts.renderRow(item, start + idx, idx)).join('') : (opts.emptyHtml || '<p style="color:#6b7280; font-size:13px;">Koi record nahi mila</p>')
+      slice.length ? slice.map((item, idx) => opts.renderRow(item, start + idx, idx)).join('') : (opts.emptyHtml || '<p style="color:#64748b; font-size:13px;">Koi record nahi mila</p>')
     }</div>`;
   } else {
     bodyEl.innerHTML = `
@@ -262,7 +381,7 @@ function drawPagedBody(id) {
   `;
 }
 
-// 4. Navigation & 4-Stage Stock Drilldown
+// === 4. NAVIGATION & 4-STAGE STOCK DRILLDOWN ===
 function getActiveSection() {
   return document.querySelector('.tab-sec:not(.hidden)');
 }
@@ -307,8 +426,8 @@ async function openStockDrilldown(mode) {
   const readyTotal = ready.reduce((s, x) => s + (x.qty || 0), 0);
 
   const btnStyle = (m) => stockTabMode === m
-    ? 'background:#0b0d12; color:#fff; border:1px solid #0b0d12;'
-    : 'background:#f3f4f6; color:#111827; border:1px solid #d1d5db;';
+    ? 'background:#0f172a; color:#fff; border:1px solid #0f172a;'
+    : 'background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1;';
 
   const sec = document.getElementById('tab-stock-detail');
   sec.innerHTML = `
@@ -349,8 +468,8 @@ async function openStockDrilldown(mode) {
       headHtml: '<tr><th>Bunkar / Saree Naam (Click for Passbook)</th><th>Available Pcs</th></tr>',
       getSearchText: (b) => b.bunkarName,
       renderRow: (b) => `
-        <tr style="cursor:pointer;" onclick="if(typeof openBunkarPassbook==='function') openBunkarPassbook('${b.bunkarName}')">
-          <td><b style="color:#1d4ed8; text-decoration:underline;">${b.bunkarName}</b> <small>(Passbook)</small></td>
+        <tr style="cursor:pointer;" onclick="if(typeof openBunkarPassbook==='function') openBunkarPassbook('${stxEsc(b.bunkarName)}')">
+          <td><b style="color:#1d4ed8; text-decoration:underline;">${stxEsc(b.bunkarName)}</b> <small>(Passbook)</small></td>
           <td><b>${b.qty} Pcs</b></td>
         </tr>
       `,
@@ -359,7 +478,7 @@ async function openStockDrilldown(mode) {
   } else if (stockTabMode === 'CONVERTED') {
     content.innerHTML = `
       <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-size:12.5px; font-weight:700; color:#15803d; margin-bottom:12px;">
-        Dukan par Design Name me convert hua stock (Manual Barcoding & Challan ke liye ready ho sakta hai): <b>${convertedTotal} Pcs</b>
+        Dukan par Design Name me convert hua stock: <b>${convertedTotal} Pcs</b>
       </div>
       <div id="stockConvertedPager"></div>
     `;
@@ -372,8 +491,8 @@ async function openStockDrilldown(mode) {
       getSearchText: (c) => `${c.designName} ${c.specLine || ''}`,
       renderRow: (c) => `
         <tr>
-          <td><b>${c.designName}</b></td>
-          <td><small>${c.specLine || '-'}</small></td>
+          <td><b>${stxEsc(c.designName)}</b></td>
+          <td><small>${stxEsc(c.specLine || '-')}</small></td>
           <td><b style="color:#1d4ed8;">${c.qty} Pcs</b></td>
         </tr>
       `,
@@ -390,7 +509,7 @@ async function openStockDrilldown(mode) {
 
     content.innerHTML = `
       <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px 14px; border-radius:8px; font-weight:700; color:#1e3a8a; margin-bottom:12px;">
-        Available Job Work se Wapas Pool (Stock Convert / Next Work ke liye): <span style="font-size:18px;">${jwPoolQty} Pcs</span>
+        Available Job Work se Wapas Pool: <span style="font-size:18px;">${jwPoolQty} Pcs</span>
       </div>
       <div id="stockJWWapsiPager"></div>
     `;
@@ -403,11 +522,11 @@ async function openStockDrilldown(mode) {
       getSearchText: (l) => `${l.date} ${l.jobWorkType} ${l.workerName} ${l.note || ''}`,
       renderRow: (l) => `
         <tr>
-          <td style="white-space:nowrap;">${l.date}</td>
-          <td><b>${l.jobWorkType}</b></td>
-          <td><b>${l.workerName}</b></td>
+          <td style="white-space:nowrap;">${stxEsc(l.date)}</td>
+          <td><b>${stxEsc(l.jobWorkType)}</b></td>
+          <td><b>${stxEsc(l.workerName)}</b></td>
           <td><b style="color:#15803d;">+${l.qty} Pcs</b></td>
-          <td><small>${l.note || '-'}</small></td>
+          <td><small>${stxEsc(l.note || '-')}</small></td>
         </tr>
       `,
       emptyHtml: '<tr><td colspan="5">Abhi Job Work se koi wapsi entry nahi hui</td></tr>'
@@ -423,8 +542,8 @@ async function openStockDrilldown(mode) {
       getSearchText: (r) => `${r.designName} ${r.firmCode} ${r.specLine || ''}`,
       renderRow: (r) => `
         <tr>
-          <td><b>${r.designName} (${r.firmCode})</b></td>
-          <td><small>${r.specLine || '-'}</small></td>
+          <td><b>${stxEsc(r.designName)} (${stxEsc(r.firmCode)})</b></td>
+          <td><small>${stxEsc(r.specLine || '-')}</small></td>
           <td><b style="color:#15803d;">${r.qty} Pcs</b></td>
         </tr>
       `,
@@ -433,7 +552,249 @@ async function openStockDrilldown(mode) {
   }
 }
 
-// 5. TALLY KEYBOARD ENGINE
+// === 4B. PENDING REPORTS (ORDERS + KARIGAR) & PARTY MASTER ===
+function computeOrderStatusFallback(order, allChallans) {
+  if (typeof window.stxComputeOrderStatus === 'function') {
+    return window.stxComputeOrderStatus(order, allChallans);
+  }
+  const ordNo = String(order.orderNo);
+  const ordParty = String(order.partyName || '').trim().toUpperCase();
+  const linked = (allChallans || []).filter(
+    (c) => String(c.orderNo || '') === ordNo && (!c.partyName || String(c.partyName).trim().toUpperCase() === ordParty)
+  );
+  const sentMap = {};
+  linked.forEach((c) => (c.items || []).forEach((it) => {
+    const k = String(it.designName || '').trim().toUpperCase();
+    sentMap[k] = (sentMap[k] || 0) + (Number(it.qty) || 0);
+  }));
+  let totalOrdered = 0, totalPending = 0;
+  const items = (order.items || []).map((it) => {
+    const k = String(it.name || '').trim().toUpperCase();
+    const oq = Number(it.qty) || 0;
+    const used = Math.min(oq, sentMap[k] || 0);
+    sentMap[k] = Math.max(0, (sentMap[k] || 0) - used);
+    const pq = Math.max(0, oq - used);
+    totalOrdered += oq;
+    totalPending += pq;
+    return { name: it.name, orderedQty: oq, sentQty: used, pendingQty: pq };
+  });
+  return { totalOrdered, totalSent: totalOrdered - totalPending, totalPending, isComplete: (order.items || []).length > 0 && totalPending === 0, items };
+}
+
+function ensureDynamicSection(id) {
+  let sec = document.getElementById(id);
+  if (!sec) {
+    const main = document.querySelector('main.container');
+    if (!main) return null;
+    sec = document.createElement('section');
+    sec.id = id;
+    sec.className = 'tab-sec hidden';
+    main.appendChild(sec);
+  }
+  return sec;
+}
+
+async function openPendingReports(mode) {
+  if (mode) reportTabMode = mode;
+  const sec = ensureDynamicSection('tab-reports');
+  if (!sec) return;
+  openTab('tab-reports', null);
+  await openDB();
+
+  const orders = (await dbGetAll('orders')).sort((a, b) => b.id - a.id);
+  const challans = await dbGetAll('challans');
+  const challansByOrd = {};
+  challans.forEach((c) => {
+    if (!c.orderNo) return;
+    const k = String(c.orderNo);
+    if (!challansByOrd[k]) challansByOrd[k] = [];
+    challansByOrd[k].push(c);
+  });
+
+  const pendingOrders = [];
+  let totalPendingOrdPcs = 0;
+  orders.forEach((o) => {
+    const st = computeOrderStatusFallback(o, challansByOrd[String(o.orderNo)] || []);
+    if (!st.isComplete) {
+      pendingOrders.push({ order: o, status: st });
+      totalPendingOrdPcs += st.totalPending;
+    }
+  });
+
+  const pendingJW = (await dbGetAll('jobWorkPending')).filter((p) => p.qty > 0).sort((a, b) => b.qty - a.qty);
+  const totalPendingJWPcs = pendingJW.reduce((s, x) => s + (x.qty || 0), 0);
+
+  const btnStyle = (m) => reportTabMode === m
+    ? 'background:#0f172a; color:#fff; border:1px solid #0f172a;'
+    : 'background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1;';
+
+  sec.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <h2>📊 Pending Summary Reports</h2>
+        <div>
+          <button class="btn btn-dark btn-sm" onclick="window.print()">🖨️ Print List</button>
+          <button class="btn btn-light btn-sm" onclick="openTabByName('tab-dash')">← Back (Esc)</button>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+        <button type="button" class="btn btn-sm" style="${btnStyle('ORDERS')}" onclick="openPendingReports('ORDERS')">
+          ⏳ Pending Orders (${pendingOrders.length} | ${totalPendingOrdPcs} Pcs)
+        </button>
+        <button type="button" class="btn btn-sm" style="${btnStyle('KARIGAR')}" onclick="openPendingReports('KARIGAR')">
+          🧵 Karigar Pending (${pendingJW.length} | ${totalPendingJWPcs} Pcs)
+        </button>
+      </div>
+
+      <div id="pendingReportPager"></div>
+    </div>
+  `;
+
+  if (reportTabMode === 'ORDERS') {
+    mountPagedList({
+      id: 'pendingReportPager',
+      items: pendingOrders,
+      perPage: 15,
+      placeholder: '🔍 Party, City, Agent, Order No. ya Design search karein...',
+      headHtml: '<tr><th>Order #</th><th>Date</th><th>Party & City</th><th>Agent</th><th>Baki Saree Detail</th><th>Total Baki</th></tr>',
+      getSearchText: (r) => `${r.order.orderNo} ${r.order.date} ${r.order.partyName} ${r.order.partyCity || ''} ${r.order.agent || ''} ${(r.status.items || []).map((i) => i.name).join(' ')}`,
+      renderRow: (r) => {
+        const o = r.order;
+        const bakiList = r.status.items.filter((i) => i.pendingQty > 0).map((i) => `${stxEsc(i.name)}: <b>${i.pendingQty}</b>/${i.orderedQty}`).join(', ');
+        return `
+          <tr>
+            <td><b>#${stxEsc(o.orderNo)}</b></td>
+            <td style="white-space:nowrap;">${stxEsc(o.date)}</td>
+            <td><b>${stxEsc(o.partyName)}</b><br/><small>${stxEsc(o.partyCity || '')}</small></td>
+            <td><small>${stxEsc(o.agent || '-')}</small></td>
+            <td><small>${bakiList}</small></td>
+            <td><b style="color:#b45309;">${r.status.totalPending} Pcs</b></td>
+          </tr>
+        `;
+      },
+      emptyHtml: '<tr><td colspan="6">🎉 Sabhi Orders complete ho chuke hain!</td></tr>'
+    });
+  } else {
+    const workers = await dbGetAll('jobWorkers');
+    mountPagedList({
+      id: 'pendingReportPager',
+      items: pendingJW,
+      perPage: 15,
+      placeholder: '🔍 Karigar naam ya Job Work type search karein...',
+      headHtml: '<tr><th>Karigar / Worker</th><th>Kaam (Job Work)</th><th>Mobile / City</th><th>Pending Pcs</th></tr>',
+      getSearchText: (p) => `${p.workerName} ${p.jobWorkType}`,
+      renderRow: (p) => {
+        const w = workers.find((x) => x.name.toUpperCase() === String(p.workerName || '').toUpperCase());
+        return `
+          <tr>
+            <td><b>${stxEsc(p.workerName)}</b></td>
+            <td>${stxEsc(p.jobWorkType)}</td>
+            <td><small>${stxEsc(w?.phone || '-')} ${stxEsc(w?.city || '')}</small></td>
+            <td><b style="color:#dc2626;">${p.qty} Pcs</b></td>
+          </tr>
+        `;
+      },
+      emptyHtml: '<tr><td colspan="4">🎉 Kisi bhi karigar par koi maal pending nahi hai!</td></tr>'
+    });
+  }
+}
+
+async function openPartyMaster() {
+  const sec = ensureDynamicSection('tab-parties');
+  if (!sec) return;
+  openTab('tab-parties', null);
+  await openDB();
+
+  const parties = (await dbGetAll('parties')).sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  sec.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <h2>👥 Party Master (${parties.length} Parties)</h2>
+        <div>
+          <button class="btn btn-dark btn-sm" onclick="openPartyModal()">+ Nayi Party</button>
+          <button class="btn btn-light btn-sm" onclick="openTabByName('tab-dash')">← Back (Esc)</button>
+        </div>
+      </div>
+      <div id="partyMasterPager"></div>
+    </div>
+  `;
+
+  mountPagedList({
+    id: 'partyMasterPager',
+    items: parties,
+    perPage: 15,
+    placeholder: '🔍 Party naam, City, Agent, Marka ya Transport search karein...',
+    headHtml: '<tr><th>Party Name</th><th>City / Address</th><th>Agent</th><th>Marka / Transport</th><th>Action</th></tr>',
+    getSearchText: (p) => `${p.name} ${p.city || ''} ${p.address || ''} ${p.agent || ''} ${p.marka || ''} ${p.transport || ''} ${p.phone || ''}`,
+    renderRow: (p) => `
+      <tr>
+        <td><b>${stxEsc(p.name)}</b>${p.phone ? `<br/><small>📞 ${stxEsc(p.phone)}</small>` : ''}</td>
+        <td><small>${stxEsc(p.city || '-')}${p.address && p.address !== p.city ? '<br/>' + stxEsc(p.address) : ''}</small></td>
+        <td><small><b>${stxEsc(p.agent || '-')}</b></small></td>
+        <td><small>${stxEsc(p.marka || '-')} | ${stxEsc(p.transport || '-')}</small></td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-light btn-sm" onclick="openPartyModal(${p.id})">✏️ Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deletePartyById(${p.id})">X</button>
+        </td>
+      </tr>
+    `,
+    emptyHtml: '<tr><td colspan="5">Abhi koi Party add nahi hai</td></tr>'
+  });
+}
+
+async function openPartyModal(id) {
+  const p = id ? await dbGet('parties', id) : null;
+  stxOpenModal({
+    title: p ? '✏️ Party Edit Karein' : '+ Nayi Party Add Karein',
+    bodyHtml: `
+      <div class="grid-2" style="align-items:start;">
+        <div><label>Party Name *</label><input id="pmName" value="${stxEsc(p?.name || '')}" placeholder="e.g. SHREE SHARDA SAREE" /></div>
+        <div><label>City *</label><input id="pmCity" value="${stxEsc(p?.city || '')}" placeholder="e.g. CHIPLOON" /></div>
+        <div><label>Mobile No.</label><input id="pmPhone" value="${stxEsc(p?.phone || '')}" placeholder="98xxxxxxxx" /></div>
+        <div><label>Agent</label><input id="pmAgent" value="${stxEsc(p?.agent || '')}" placeholder="e.g. RAJESH JI" /></div>
+        <div><label>Marka</label><input id="pmMarka" value="${stxEsc(p?.marka || '')}" placeholder="e.g. SSS" /></div>
+        <div><label>Transport</label><input id="pmTrans" value="${stxEsc(p?.transport || '')}" placeholder="e.g. VRL" /></div>
+        <div style="grid-column:1 / -1;"><label>Full Address</label><input id="pmAddr" value="${stxEsc(p?.address || '')}" placeholder="Shop address..." /></div>
+      </div>
+    `,
+    buttons: [
+      { label: 'Cancel', className: 'btn btn-light', onClick: () => stxCloseModal() },
+      {
+        label: p ? '✅ Update Party' : '✅ Save Party',
+        className: 'btn btn-success',
+        onClick: async () => {
+          const name = document.getElementById('pmName').value.trim().toUpperCase();
+          const city = document.getElementById('pmCity').value.trim().toUpperCase();
+          if (!name) return stxToast('Party Name zaroori hai!', 'warn');
+          const payload = {
+            name,
+            city,
+            address: document.getElementById('pmAddr').value.trim().toUpperCase() || city,
+            agent: document.getElementById('pmAgent').value.trim().toUpperCase(),
+            phone: document.getElementById('pmPhone').value.trim(),
+            marka: document.getElementById('pmMarka').value.trim().toUpperCase(),
+            transport: document.getElementById('pmTrans').value.trim().toUpperCase()
+          };
+          if (p && p.id) payload.id = p.id;
+          await dbPut('parties', payload);
+          stxCloseModal();
+          stxToast('✅ Party save ho gayi!', 'success');
+          openPartyMaster();
+        }
+      }
+    ]
+  });
+}
+
+async function deletePartyById(id) {
+  if (!confirm('Kya is Party ko Master list se hatana hai?')) return;
+  await dbDelete('parties', id);
+  stxToast('Party delete ho gayi', 'info');
+  openPartyMaster();
+}
+
+// === 5. TALLY KEYBOARD ENGINE ===
 function moveListSelection(listEl, dir) {
   const rows = Array.from(listEl.querySelectorAll('.list-row'));
   if (!rows.length) return;
@@ -479,10 +840,17 @@ document.addEventListener('keydown', (e) => {
   if (loader && !loader.classList.contains('hidden')) return;
   if (!document.getElementById('lockScreen').classList.contains('hidden')) return;
 
+  if (e.key === 'Escape' && document.getElementById('stxModalBackdrop')) {
+    e.preventDefault();
+    stxCloseModal();
+    return;
+  }
+
   if (e.altKey) {
     const map = { '0':'tab-dash', '1':'tab-jobwork', '2':'tab-inward', '3':'tab-order', '4':'tab-barcode', '5':'tab-challan', '7':'tab-settings' };
     if (e.key === '6') { e.preventDefault(); openStockDrilldown('BUNKAR'); return; }
     if (e.key === '8' && document.getElementById('tab-daybook')) { e.preventDefault(); openTab('tab-daybook', document.getElementById('navBtnDaybook')); return; }
+    if (e.key === '9') { e.preventDefault(); openPendingReports('ORDERS'); return; }
     if (map[e.key]) { e.preventDefault(); openTabByName(map[e.key]); return; }
   }
 
@@ -546,14 +914,14 @@ document.addEventListener('keydown', (e) => {
       const active = visibleList.querySelector('.list-row.kbd-active');
       if (active) { e.preventDefault(); active.click(); return; }
     }
-    if (/^[1-9]$/.test(e.key)) {
+    if (/^[0-9]$/.test(e.key)) {
       const target = visibleList.querySelector(`.list-row[data-key="${e.key}"]`);
       if (target) { e.preventDefault(); target.click(); return; }
     }
   }
 });
 
-// 6. Multi-Firm Settings
+// === 6. MULTI-FIRM SETTINGS ===
 async function saveFirm() {
   try {
     const name = document.getElementById('firmName').value.trim();
@@ -561,37 +929,43 @@ async function saveFirm() {
     const phone = document.getElementById('firmPhone').value.trim();
     const gstin = document.getElementById('firmGst').value.trim().toUpperCase();
     const address = document.getElementById('firmAddress').value.trim();
-    if (!name || !shortCode) return alert('Firm Name aur Short Code zaroori hai!');
+    if (!name || !shortCode) return stxToast('Firm Name aur Short Code zaroori hai!', 'warn');
     await dbPut('firms', { name, shortCode, phone, gstin, address });
     ['firmName','firmCode','firmPhone','firmGst','firmAddress'].forEach((id) => document.getElementById(id).value = '');
     await loadFirms();
-    alert('Firm save ho gayi!');
-  } catch (err) { alert('Save Error: ' + err.message); }
+    stxToast('✅ Firm save ho gayi!', 'success');
+  } catch (err) { stxRecordError(err.message, 'saveFirm'); }
 }
 
 async function deleteFirm(id) {
   if (!confirm('Is Firm ko hatana hai?')) return;
   await dbDelete('firms', id);
   await loadFirms();
+  stxToast('Firm delete ho gayi', 'info');
 }
 
 async function loadFirms() {
   const firms = await dbGetAll('firms');
-  document.getElementById('firmTableBody').innerHTML = firms.map((f) => `
-    <tr>
-      <td><b>${f.name}</b><br/><small>${f.address || ''}</small></td>
-      <td><b>${f.shortCode}</b></td>
-      <td>${f.phone || '-'}</td>
-      <td><button class="btn btn-danger btn-sm" onclick="deleteFirm(${f.id})">Delete</button></td>
-    </tr>
-  `).join('') || '<tr><td colspan="4">Abhi koi firm add nahi hai</td></tr>';
+  const tbody = document.getElementById('firmTableBody');
+  if (tbody) {
+    tbody.innerHTML = firms.map((f) => `
+      <tr>
+        <td><b>${stxEsc(f.name)}</b><br/><small>${stxEsc(f.address || '')}</small></td>
+        <td><b>${stxEsc(f.shortCode)}</b></td>
+        <td>${stxEsc(f.phone || '-')}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="deleteFirm(${f.id})">Delete</button></td>
+      </tr>
+    `).join('') || '<tr><td colspan="4">Abhi koi firm add nahi hai</td></tr>';
+  }
 
-  document.getElementById('activeFirmLabel').textContent =
-    firms.length ? firms.map((f) => f.shortCode).join(' / ') + ' — Saree ERP' : 'Settings me Firm add karein';
+  const lbl = document.getElementById('activeFirmLabel');
+  if (lbl) {
+    lbl.textContent = firms.length ? firms.map((f) => f.shortCode).join(' / ') + ' — Saree ERP' : 'Settings me Firm add karein';
+  }
   return firms;
 }
 
-// 7. Backup, Stock Audit Sync, Year Closing & Dashboard
+// === 7. BACKUP, STOCK AUDIT SYNC, YEAR CLOSING & 4-CARD PRO DASHBOARD ===
 async function downloadBackup() {
   const json = await exportFullBackup();
   const blob = new Blob([json], { type: 'application/json' });
@@ -601,6 +975,7 @@ async function downloadBackup() {
   a.click();
   localStorage.setItem('simplitex_last_backup_ms', String(Date.now()));
   renderSettingsBackupExtras();
+  stxToast('⬇️ Backup download ho gaya!', 'success');
 }
 
 async function handleRestore(input) {
@@ -608,9 +983,9 @@ async function handleRestore(input) {
   if (!file) return;
   try {
     await restoreFullBackup(await file.text());
-    alert('Backup Restore ho gaya!');
+    stxToast('✅ Backup Restore ho gaya!', 'success');
     initApp();
-  } catch (err) { alert('Error: ' + err.message); }
+  } catch (err) { stxRecordError(err.message, 'restore'); }
 }
 
 async function runManualStockSync() {
@@ -619,9 +994,9 @@ async function runManualStockSync() {
       await window.stxRecalculateAllStock();
     }
     await refreshDashboard();
-    alert('✅ Stock Audit & Sync Complete! Saari entries ginke 100% sahi Live Stock aur Pending update ho gaya hai.');
+    stxToast('✅ Stock Audit & Sync Complete!', 'success');
   } catch (err) {
-    alert('Stock Sync Error: ' + err.message);
+    stxRecordError(err.message, 'stockSync');
   }
 }
 
@@ -642,13 +1017,13 @@ function renderSettingsBackupExtras() {
   const lastMs = Number(localStorage.getItem('simplitex_last_backup_ms') || 0);
   let statusHtml = '';
   if (!lastMs) {
-    statusHtml = '<span style="color:#b91c1c; font-weight:700;">⚠️ Abhi tak ek baar bhi Backup nahi liya gaya hai!</span>';
+    statusHtml = '<span style="color:#dc2626; font-weight:700;">⚠️ Abhi tak ek baar bhi Backup nahi liya gaya hai!</span>';
   } else {
     const daysAgo = Math.floor((Date.now() - lastMs) / 86400000);
     const dStr = new Date(lastMs).toLocaleDateString('en-IN');
     statusHtml = daysAgo > 7
-      ? `<span style="color:#b45309; font-weight:700;">⚠️ Last Backup: ${dStr} (${daysAgo} din pehle) — Naya Backup le lein!</span>`
-      : `<span style="color:#15803d; font-weight:700;">✅ Last Backup: ${dStr} (${daysAgo === 0 ? 'Aaj' : daysAgo + ' din pehle'})</span>`;
+      ? `<span style="color:#d97706; font-weight:700;">⚠️ Last Backup: ${dStr} (${daysAgo} din pehle) — Naya Backup le lein!</span>`
+      : `<span style="color:#16a34a; font-weight:700;">✅ Last Backup: ${dStr} (${daysAgo === 0 ? 'Aaj' : daysAgo + ' din pehle'})</span>`;
   }
 
   let lanBoxHtml = '';
@@ -670,29 +1045,24 @@ function renderSettingsBackupExtras() {
   host.innerHTML = `
     ${lanBoxHtml}
     <div style="font-size:12.5px; margin-bottom:10px;">${statusHtml}</div>
-    <div style="border-top:1px dashed #d1d5db; padding-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+    <div style="border-top:1px dashed #cbd5e1; padding-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
       <button type="button" class="btn btn-dark btn-sm" onclick="runManualStockSync()">
-        🔄 Stock Audit & Sync (Hisab Verify Karein)
+        🔄 Stock Audit & Sync
       </button>
       <button type="button" class="btn btn-light btn-sm" onclick="startYearClosing()">
-        🗓️ Year Closing (Backup Le Kar Purane Bills Clear Karein)
+        🗓️ Year Closing (Backup + New Year)
       </button>
-    </div>
-    <div style="font-size:11.5px; color:#6b7280; margin-top:6px;">
-      *Year Closing me pehle Backup download hoga, phir aapka Live Stock Opening Balance ban kar save rahega aur sirf purane Bills/Ledger saaf honge.
     </div>
   `;
 }
 
 async function startYearClosing() {
-  if (!confirm('🗓️ Kya aap Naya Saal (Year Closing) shuru karna chahte hain?\nPehle aapka poora Backup (.json) download hoga, phir aapke Live Stock & Pending ko naye saal ka Opening Stock bana kar purane Bills/Ledger saaf kiye jayenge.')) return;
+  if (!confirm('🗓️ Kya aap Naya Saal (Year Closing) shuru karna chahte hain?\nPehle aapka poora Backup (.json) download hoga, phir Live Stock Opening Balance ban kar save rahega aur purane Bills/Ledger saaf honge.')) return;
   const check = prompt('Confirm karne ke liye "CLOSE" likhein:');
-  if (!check || check.trim().toUpperCase() !== 'CLOSE') return alert('Year Closing cancel kar diya gaya.');
+  if (!check || check.trim().toUpperCase() !== 'CLOSE') return stxToast('Year Closing cancel kar diya gaya', 'info');
 
   try {
-    if (typeof window.stxRecalculateAllStock === 'function') {
-      await window.stxRecalculateAllStock();
-    }
+    if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     await downloadBackup();
 
     const openingSnapshot = {
@@ -703,37 +1073,130 @@ async function startYearClosing() {
     };
     localStorage.setItem('simplitex_opening_stock', JSON.stringify(openingSnapshot));
 
-    if (typeof clearTransactionStoresForNewYear === 'function') {
-      await clearTransactionStoresForNewYear();
-    }
-    if (typeof window.stxRecalculateAllStock === 'function') {
-      await window.stxRecalculateAllStock();
-    }
-    if (typeof refreshDashboard === 'function') await refreshDashboard();
-    alert('✅ Poora Backup download ho gaya aur Naya Saal ready hai! Live Stock Opening Balance ke roop me bilkul safe hai.');
+    if (typeof clearTransactionStoresForNewYear === 'function') await clearTransactionStoresForNewYear();
+    if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
+    await refreshDashboard();
+    stxToast('✅ Naya Saal Ready hai! Opening Stock safe hai.', 'success', 4000);
   } catch (err) {
-    alert('Year Closing Error: ' + err.message);
+    stxRecordError(err.message, 'yearClosing');
+  }
+}
+
+function ensureDashboardProWidgets() {
+  const dash = document.getElementById('tab-dash');
+  if (!dash) return;
+
+  if (!document.getElementById('stxDashKpis')) {
+    const kpi = document.createElement('div');
+    kpi.id = 'stxDashKpis';
+    kpi.className = 'stx-kpi-grid';
+    kpi.innerHTML = `
+      <div class="stx-kpi-card" onclick="openStockDrilldown('BUNKAR')">
+        <div class="stx-kpi-label">📦 Total Stock</div>
+        <div class="stx-kpi-val" id="kpiStockTotal">0 Pcs</div>
+        <div class="stx-kpi-sub" id="kpiStockSub">Bunkar: 0 | Conv: 0 | Ready: 0</div>
+      </div>
+      <div class="stx-kpi-card" onclick="openPendingReports('KARIGAR')">
+        <div class="stx-kpi-label">🧵 Karigar Pending</div>
+        <div class="stx-kpi-val" id="kpiJWTotal" style="color:#dc2626;">0 Pcs</div>
+        <div class="stx-kpi-sub" id="kpiJWSub">0 Karigar par baki</div>
+      </div>
+      <div class="stx-kpi-card" onclick="openPendingReports('ORDERS')">
+        <div class="stx-kpi-label">⏳ Pending Orders</div>
+        <div class="stx-kpi-val" id="kpiOrdPending" style="color:#d97706;">0</div>
+        <div class="stx-kpi-sub" id="kpiOrdSub">0 Pcs bhejna baki</div>
+      </div>
+      <div class="stx-kpi-card" onclick="openTabByName('tab-challan')">
+        <div class="stx-kpi-label">🚚 Aaj ke Challans</div>
+        <div class="stx-kpi-val" id="kpiTodayChallan" style="color:#16a34a;">₹0</div>
+        <div class="stx-kpi-sub" id="kpiTodaySub">0 Bills | 0 Pcs</div>
+      </div>
+    `;
+    const hero = dash.querySelector('.hero-stock');
+    if (hero) hero.insertAdjacentElement('afterend', kpi);
+    else dash.prepend(kpi);
+  }
+
+  const gw = document.getElementById('gatewayMenu');
+  if (gw) {
+    if (!document.getElementById('gwReportsRow')) {
+      const r1 = document.createElement('div');
+      r1.id = 'gwReportsRow';
+      r1.className = 'list-row';
+      r1.dataset.key = '9';
+      r1.onclick = () => openPendingReports('ORDERS');
+      r1.innerHTML = '<span>9. Pending Reports (Orders & Karigar)</span><span class="badge">Key: 9</span>';
+      gw.appendChild(r1);
+    }
+    if (!document.getElementById('gwPartiesRow')) {
+      const r2 = document.createElement('div');
+      r2.id = 'gwPartiesRow';
+      r2.className = 'list-row';
+      r2.dataset.key = '0';
+      r2.onclick = () => openPartyMaster();
+      r2.innerHTML = '<span>0. Party Master (Manage & Edit Parties)</span><span class="badge">Key: 0</span>';
+      gw.appendChild(r2);
+    }
   }
 }
 
 async function refreshDashboard() {
   await openDB();
+  ensureDashboardProWidgets();
+
   const bunkarAll = await dbGetAll('bunkarStock');
   const convertedAll = await dbGetAll('convertedStock');
-  const pending = await dbGetAll('jobWorkPending');
+  const pending = (await dbGetAll('jobWorkPending')).filter((p) => p.qty > 0);
   const ready = await dbGetAll('readyStock');
-  const challansCount = (typeof dbCount === 'function')
-    ? await dbCount('challans')
-    : (await dbGetAll('challans')).length;
+  const orders = await dbGetAll('orders');
+  const challans = await dbGetAll('challans');
 
   const unbarcodedTotal = bunkarAll.reduce((s, x) => s + (x.qty || 0), 0);
   const convertedTotal = convertedAll.reduce((s, x) => s + (x.qty || 0), 0);
   const readyTotal = ready.reduce((s, x) => s + (x.qty || 0), 0);
+  const grandTotal = unbarcodedTotal + convertedTotal + readyTotal;
+  const pendingJWTotal = pending.reduce((s, x) => s + (x.qty || 0), 0);
 
-  document.getElementById('statTotalStock').textContent = unbarcodedTotal + convertedTotal + readyTotal;
-  document.getElementById('statPendingJW').textContent = pending.reduce((s, x) => s + (x.qty || 0), 0);
+  document.getElementById('statTotalStock').textContent = grandTotal;
+  document.getElementById('statPendingJW').textContent = pendingJWTotal;
   document.getElementById('statReadyStock').textContent = readyTotal;
-  document.getElementById('statChallans').textContent = challansCount;
+  document.getElementById('statChallans').textContent = challans.length;
+
+  // Compute Pending Orders
+  const chByOrd = {};
+  challans.forEach((c) => {
+    if (!c.orderNo) return;
+    const k = String(c.orderNo);
+    if (!chByOrd[k]) chByOrd[k] = [];
+    chByOrd[k].push(c);
+  });
+  let pendOrdCount = 0;
+  let pendOrdPcs = 0;
+  orders.forEach((o) => {
+    const st = computeOrderStatusFallback(o, chByOrd[String(o.orderNo)] || []);
+    if (!st.isComplete) {
+      pendOrdCount++;
+      pendOrdPcs += st.totalPending;
+    }
+  });
+
+  // Compute Today's Sale
+  const today = stxTodayISO();
+  const todayChallans = challans.filter((c) => c.date === today);
+  const todayPcs = todayChallans.reduce((s, c) => s + (Number(c.totalPcs) || 0), 0);
+  const todayAmt = todayChallans.reduce((s, c) => s + (Number(c.totalAmount) || 0), 0);
+
+  const elKpiStock = document.getElementById('kpiStockTotal');
+  if (elKpiStock) {
+    elKpiStock.textContent = `${grandTotal} Pcs`;
+    document.getElementById('kpiStockSub').textContent = `Bunkar: ${unbarcodedTotal} | Conv: ${convertedTotal} | Ready: ${readyTotal}`;
+    document.getElementById('kpiJWTotal').textContent = `${pendingJWTotal} Pcs`;
+    document.getElementById('kpiJWSub').textContent = `${pending.length} Karigar par baki`;
+    document.getElementById('kpiOrdPending').textContent = `${pendOrdCount} Orders`;
+    document.getElementById('kpiOrdSub').textContent = `${pendOrdPcs} Pcs bhejna baki`;
+    document.getElementById('kpiTodayChallan').textContent = `₹${todayAmt.toLocaleString('en-IN')}`;
+    document.getElementById('kpiTodaySub').textContent = `${todayChallans.length} Bills | ${todayPcs} Pcs`;
+  }
 }
 
 function updateNetBadge() {
@@ -752,7 +1215,7 @@ function updateNetBadge() {
 window.addEventListener('online', updateNetBadge);
 window.addEventListener('offline', updateNetBadge);
 
-// 8. LIVE MULTI-PC SYNC LISTENER (SSE Updates from Other PCs)
+// === 8. LIVE MULTI-PC SYNC LISTENER ===
 function showLanSyncToast() {
   let toast = document.getElementById('stxLanSyncToast');
   if (!toast) {
@@ -760,7 +1223,7 @@ function showLanSyncToast() {
     toast.id = 'stxLanSyncToast';
     toast.style.cssText = [
       'position:fixed', 'right:16px', 'bottom:16px', 'z-index:9990',
-      'background:#0b0d12', 'color:#fff', 'border:1px solid #374151',
+      'background:#0f172a', 'color:#fff', 'border:1px solid #334155',
       'padding:10px 14px', 'border-radius:10px', 'box-shadow:0 10px 25px rgba(0,0,0,0.3)',
       'display:flex', 'align-items:center', 'gap:10px', 'font-size:12.5px', 'font-weight:600'
     ].join(';');
@@ -785,6 +1248,8 @@ function refreshActiveTabAfterLanSync() {
   if (!sec) return;
   if (sec.id === 'tab-dash') refreshDashboard();
   else if (sec.id === 'tab-stock-detail') openStockDrilldown();
+  else if (sec.id === 'tab-reports') openPendingReports();
+  else if (sec.id === 'tab-parties') openPartyMaster();
   else if (sec.id === 'tab-settings') { loadFirms(); renderSettingsBackupExtras(); }
   else if (typeof window.onTabChanged === 'function') window.onTabChanged(sec.id);
 }
@@ -805,15 +1270,12 @@ window.addEventListener('stx-lan-sync', async (ev) => {
 
     const sec = getActiveSection();
     if (!sec) return;
-    if (sec.id === 'tab-stock-detail') {
-      await openStockDrilldown();
-    } else if (sec.id === 'tab-daybook' && typeof window.onTabChanged === 'function') {
-      window.onTabChanged('tab-daybook');
-    } else if (sec.id === 'tab-settings') {
-      renderSettingsBackupExtras();
-    } else if (sec.id !== 'tab-dash') {
-      showLanSyncToast();
-    }
+    if (sec.id === 'tab-stock-detail') await openStockDrilldown();
+    else if (sec.id === 'tab-reports') await openPendingReports();
+    else if (sec.id === 'tab-parties') await openPartyMaster();
+    else if (sec.id === 'tab-daybook' && typeof window.onTabChanged === 'function') window.onTabChanged('tab-daybook');
+    else if (sec.id === 'tab-settings') renderSettingsBackupExtras();
+    else if (sec.id !== 'tab-dash') showLanSyncToast();
   } catch (_) {}
 });
 
@@ -844,7 +1306,7 @@ async function initApp() {
 
     setTallyLoader(null, 'Opening Company Database...', 45);
     await openDB();
-    await sleepMs(100);
+    await sleepMs(80);
 
     setTallyLoader(null, 'Loading Company & Masters...', 65);
     const firms = await loadFirms();
@@ -856,17 +1318,17 @@ async function initApp() {
     if (typeof window.stxRecalculateAllStock === 'function') {
       await window.stxRecalculateAllStock();
     }
-    await sleepMs(100);
+    await sleepMs(80);
 
     await refreshDashboard();
     renderSettingsBackupExtras();
 
     setTallyLoader(companyTitle, 'Company Loaded — Ready!', 100);
-    await sleepMs(200);
+    await sleepMs(180);
     hideTallyLoader(false);
   } catch (err) {
     hideTallyLoader(true);
-    alert('App Loading Error: ' + err.message);
+    stxRecordError(err.message, 'initApp');
   }
 }
 
