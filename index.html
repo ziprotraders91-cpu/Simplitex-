@@ -139,9 +139,9 @@
     <!-- Module Containers -->
     <section id="tab-jobwork" class="tab-sec hidden"></section>
     <section id="tab-inward" class="tab-sec hidden"></section>
-    <section id="tab-order" class="tab-sec hidden"><div class="card"><h2>3. Order Form</h2><p>Agle step me aayega...</p></div></section>
-    <section id="tab-barcode" class="tab-sec hidden"><div class="card"><h2>4. Barcoding</h2><p>Agle step me aayega...</p></div></section>
-    <section id="tab-challan" class="tab-sec hidden"><div class="card"><h2>5. Challan & Packing Slip</h2><p>Agle step me aayega...</p></div></section>
+    <section id="tab-order" class="tab-sec hidden"><div class="card"><h2>3. Order Form</h2><p>Loading...</p></div></section>
+    <section id="tab-barcode" class="tab-sec hidden"><div class="card"><h2>4. Barcoding</h2><p>Loading...</p></div></section>
+    <section id="tab-challan" class="tab-sec hidden"><div class="card"><h2>5. Challan & Packing Slip</h2><p>Loading...</p></div></section>
 
     <!-- SETTINGS -->
     <section id="tab-settings" class="tab-sec hidden">
@@ -150,7 +150,7 @@
           <h2>Apni Firm Add Karein (KT / IF)</h2>
           <span class="shortcut-hint">Esc = Gateway</span>
         </div>
-        <div class="grid-2">
+        <div class="grid-2" style="align-items:start;">
           <div><label>Firm Name *</label><input id="firmName" placeholder="e.g. Kamran Traders" /></div>
           <div><label>Short Code *</label><input id="firmCode" placeholder="e.g. KT ya IF" maxlength="6" /></div>
           <div><label>Mobile No.</label><input id="firmPhone" placeholder="9839xxxxxx" /></div>
@@ -188,7 +188,7 @@
   <script src="./app.js"></script>
   <script src="./mod-inward.js"></script>
   <script src="./mod-order.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
+  <script src="./JsBarcode.all.min.js" onerror="var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js';document.head.appendChild(s);"></script>
   <script src="./mod-barcode.js"></script>
   <script src="./mod-challan.js"></script>
   <script src="./mod-daybook.js"></script>
