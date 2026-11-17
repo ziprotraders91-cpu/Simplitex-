@@ -1,7 +1,7 @@
-// === SimpliTex Module 1 & 2 v3 (Complete: Edit Everywhere + Auto Stock Engine + Aligned + A5 Bill) ===
+// === SimpliTex Module 1 & 2 v4 (Edit Everywhere + Auto Stock Engine + Aligned + A5 Bill + LAN Mode Safe) ===
 
 const _JW_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
-let jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, editId: null, origCreatedAt: null, origQtyMap: {} };
+let jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, autoJobWorkNo: null, editId: null, origCreatedAt: null, origQtyMap: {} };
 let inState = { step: 'MENU', jwType: '', worker: null, editId: null, editOrig: null, returnTo: '' };
 
 function esc(str) {
@@ -51,6 +51,18 @@ function switchTabSectionOnly(tabId) {
 
 async function getNextJobWorkNoFast() {
   const db = await openDB();
+  if (!db || typeof db.transaction !== 'function') {
+    const all = await dbGetAll('jobWorkLedger');
+    let maxNo = 0;
+    for (const v of all) {
+      if (v && v.direction === 'OUT') {
+        const n = Number(v.jobWorkNo) || 0;
+        if (n > maxNo) maxNo = n;
+      }
+    }
+    return maxNo + 1;
+  }
+
   return new Promise((resolve) => {
     const tx = db.transaction('jobWorkLedger', 'readonly');
     const store = tx.objectStore('jobWorkLedger');
@@ -73,6 +85,11 @@ async function getNextJobWorkNoFast() {
 
 async function countInwardLedgerFast() {
   const db = await openDB();
+  if (!db || typeof db.transaction !== 'function') {
+    const ins = await dbGetByIndex('jobWorkLedger', 'direction', 'IN');
+    return ins.length;
+  }
+
   return new Promise((resolve) => {
     const tx = db.transaction('jobWorkLedger', 'readonly');
     const store = tx.objectStore('jobWorkLedger');
@@ -112,7 +129,7 @@ function ensureJWPrintSetup(pageCss) {
 
 window.onTabChanged = function (tabId) {
   if (tabId === 'tab-jobwork') {
-    jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, editId: null, origCreatedAt: null, origQtyMap: {} };
+    jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, autoJobWorkNo: null, editId: null, origCreatedAt: null, origQtyMap: {} };
     resetPager('jwTypePager');
     renderJWOutward();
   } else if (tabId === 'tab-inward') {
@@ -126,7 +143,7 @@ window.handleModuleEscape = function () {
   if (!sec) return false;
   if (sec.id === 'tab-jobwork') {
     if (jwState.step === 'BATCH' || jwState.step === 'PASSBOOK') {
-      jwState.step = 'WORKER'; jwState.worker = null; jwState.meta = null; jwState.editId = null; jwState.origQtyMap = {}; renderJWOutward(); return true;
+      jwState.step = 'WORKER'; jwState.worker = null; jwState.meta = null; jwState.autoJobWorkNo = null; jwState.editId = null; jwState.origQtyMap = {}; renderJWOutward(); return true;
     }
     if (jwState.step === 'WORKER') {
       jwState.step = 'TYPE'; jwState.jwType = ''; renderJWOutward(); return true;
@@ -262,6 +279,7 @@ async function renderJWOutward() {
 
     if (!jwState.meta) {
       const nextJWNo = await getNextJobWorkNoFast();
+      jwState.autoJobWorkNo = String(nextJWNo);
       jwState.meta = {
         firmId: firms.length ? firms[0].id : '', jobWorkNo: nextJWNo, date: todayISO(),
         transport: jwState.worker.transport || '', destination: jwState.worker.city || '', note: ''
@@ -318,7 +336,7 @@ function syncBatchMeta() {
 function pickOutJWType(name) { jwState.jwType = name; jwState.step = 'WORKER'; resetPager('jwWorkerPager'); renderJWOutward(); }
 async function pickOutWorker(id) {
   jwState.worker = await dbGet('jobWorkers', id);
-  jwState.batchRows = []; jwState.meta = null; jwState.editId = null; jwState.origCreatedAt = null; jwState.origQtyMap = {};
+  jwState.batchRows = []; jwState.meta = null; jwState.autoJobWorkNo = null; jwState.editId = null; jwState.origCreatedAt = null; jwState.origQtyMap = {};
   jwState.step = 'BATCH'; renderJWOutward();
 }
 async function openWorkerPassbook(id) {
@@ -335,6 +353,7 @@ async function editLedgerOut(id) {
   const origMap = {};
   (entry.batchItems || []).forEach((r) => { origMap[r.bunkarName] = (origMap[r.bunkarName] || 0) + (Number(r.qty) || 0); });
   jwState.jwType = entry.jobWorkType; jwState.worker = w; jwState.editId = entry.id; jwState.origCreatedAt = entry.createdAt; jwState.origQtyMap = origMap;
+  jwState.autoJobWorkNo = null;
   jwState.batchRows = (entry.batchItems || []).map((r) => ({ bunkarName: r.bunkarName, qty: Number(r.qty) || 0 }));
   jwState.meta = { firmId: entry.firmId || '', jobWorkNo: entry.jobWorkNo || '', date: entry.date || todayISO(), transport: entry.transport || '', destination: entry.destination || '', note: entry.note || '' };
   jwState.step = 'BATCH'; renderJWOutward();
@@ -417,6 +436,13 @@ async function saveBatchOutward() {
     syncBatchMeta();
     if (!jwState.batchRows.length) return alert('Batch khali hai! Kam se kam 1 saree add karein.');
     const m = jwState.meta;
+
+    // Multi-PC Guard: Agar user ne auto-number hi rakha hai aur dusre PC par wo number ban chuka hai toh fresh number lein
+    if (!jwState.editId && jwState.autoJobWorkNo && String(m.jobWorkNo) === String(jwState.autoJobWorkNo)) {
+      const freshNo = await getNextJobWorkNoFast();
+      if (freshNo > Number(m.jobWorkNo)) m.jobWorkNo = freshNo;
+    }
+
     if (!m.note) {
       const entered = prompt('Bill ke neeche kya kaam print karna hai? (e.g. GAWATI ZARI CONTRAST ANCHAL)');
       if (entered && entered.trim()) m.note = entered.trim().toUpperCase();
@@ -439,8 +465,8 @@ async function saveBatchOutward() {
     if (typeof refreshDashboard === 'function') await refreshDashboard();
     const wasEdit = !!jwState.editId;
     if (confirm(`📤 Job Work #${m.jobWorkNo} (${totalQty} Pcs) ${wasEdit ? 'Update' : 'Save'} ho gaya!\nKya abhi Half-A4 (A5) Bill Print karna hai?`)) await printJobWorkBill(ledgerId);
-    if (wasEdit) { jwState.step = 'PASSBOOK'; jwState.editId = null; jwState.origQtyMap = {}; jwState.meta = null; }
-    else { jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, editId: null, origCreatedAt: null, origQtyMap: {} }; }
+    if (wasEdit) { jwState.step = 'PASSBOOK'; jwState.editId = null; jwState.origQtyMap = {}; jwState.meta = null; jwState.autoJobWorkNo = null; }
+    else { jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, autoJobWorkNo: null, editId: null, origCreatedAt: null, origQtyMap: {} }; }
     renderJWOutward();
   } catch (err) { alert('Save Error: ' + err.message); }
 }
