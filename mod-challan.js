@@ -1,4 +1,4 @@
-// === SimpliTex Module 5 (Challan) & Module 6 (A5 Packing Slip - No Party Name) ===
+// === SimpliTex Module 5 & 6: Challan (Half-A4) & A5 Packing Slip (Universal Pager + Aligned) ===
 
 let challanState = { view: 'FORM', items: [], linkedOrderNo: '' };
 
@@ -24,7 +24,7 @@ window.handleModuleEscape = function () {
 };
 
 function setPrintPageStyle(cssText) {
-  if (typeof ensureOrderPrintSetup === 'function') ensureOrderPrintSetup();
+  if (typeof ensureOrderPrintSetup === 'function') ensureOrderPrintSetup(cssText);
   let pageSt = document.getElementById('simplitexDynamicPageCSS');
   if (!pageSt) {
     pageSt = document.createElement('style');
@@ -39,7 +39,7 @@ async function renderChallanModule() {
   if (typeof ensureOrderPrintSetup === 'function') ensureOrderPrintSetup();
   const box = document.getElementById('tab-challan');
 
-  // === VIEW 1: SAVED CHALLANS LIST ===
+  // === VIEW 1: SAVED CHALLANS LIST (Universal Search + 15-Row Pager) ===
   if (challanState.view === 'LIST') {
     const challans = (await dbGetAll('challans')).sort((a, b) => b.id - a.id);
     const firms = await dbGetAll('firms');
@@ -53,38 +53,44 @@ async function renderChallanModule() {
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
-        <div style="overflow-x:auto;">
-          <table>
-            <thead>
-              <tr><th>Challan #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Pcs / Amount</th><th>Print & Reverse</th></tr>
-            </thead>
-            <tbody>
-              ${challans.map((c) => {
-                const f = firms.find((x) => x.id === Number(c.firmId));
-                return `
-                  <tr>
-                    <td><b>#${esc(c.challanNo)}</b></td>
-                    <td>${esc(c.date)}</td>
-                    <td><b>${esc(f ? f.shortCode : '-')}</b></td>
-                    <td><b>${esc(c.partyName)}</b><br/><small>${esc(c.partyCity || '')} | ${esc(c.transport || '')}</small></td>
-                    <td><b>${c.totalPcs} Pcs</b><br/><small>₹${Number(c.totalAmount || 0).toLocaleString('en-IN')}</small></td>
-                    <td style="white-space:nowrap;">
-                      <button class="btn btn-dark btn-sm" onclick="printChallanById(${c.id})">🖨️ Challan</button>
-                      <button class="btn btn-success btn-sm" onclick="printA5PackingSlipById(${c.id})">🏷️ A5 Slip</button>
-                      <button class="btn btn-danger btn-sm" onclick="reverseChallanById(${c.id})">↩️ Del</button>
-                    </td>
-                  </tr>
-                `;
-              }).join('') || '<tr><td colspan="6">Abhi koi Challan nahi bana hai</td></tr>'}
-            </tbody>
-          </table>
-        </div>
+        <div id="challanListPager"></div>
       </div>
     `;
+
+    mountPagedList({
+      id: 'challanListPager',
+      items: challans,
+      perPage: 15,
+      placeholder: '🔍 Challan No., Party, City, Transport, Marka ya Saree search karein...',
+      headHtml: '<tr><th>Challan #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Pcs / Amount</th><th>Print & Reverse</th></tr>',
+      getSearchText: (c) => {
+        const f = firms.find((x) => x.id === Number(c.firmId));
+        const itemTxt = (c.items || []).map((it) => it.designName).join(' ');
+        return `${c.challanNo} ${c.date} ${f ? f.shortCode : ''} ${c.partyName} ${c.partyCity} ${c.marka || ''} ${c.transport || ''} ${itemTxt}`;
+      },
+      renderRow: (c) => {
+        const f = firms.find((x) => x.id === Number(c.firmId));
+        return `
+          <tr>
+            <td><b>#${esc(c.challanNo)}</b></td>
+            <td style="white-space:nowrap;">${esc(c.date)}</td>
+            <td><b>${esc(f ? f.shortCode : '-')}</b></td>
+            <td><b>${esc(c.partyName)}</b><br/><small>${esc(c.partyCity || '')} | ${esc(c.transport || '')}</small></td>
+            <td><b>${c.totalPcs} Pcs</b><br/><small>₹${Number(c.totalAmount || 0).toLocaleString('en-IN')}</small></td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-dark btn-sm" onclick="printChallanById(${c.id})">🖨️ Challan</button>
+              <button class="btn btn-success btn-sm" onclick="printA5PackingSlipById(${c.id})">🏷️ A5 Slip</button>
+              <button class="btn btn-danger btn-sm" onclick="reverseChallanById(${c.id})">↩️ Del</button>
+            </td>
+          </tr>
+        `;
+      },
+      emptyHtml: '<tr><td colspan="6">Abhi koi Challan nahi bana hai</td></tr>'
+    });
     return;
   }
 
-  // === VIEW 2: NEW CHALLAN FORM ===
+  // === VIEW 2: NEW CHALLAN FORM (Sabhi Boxes Ek Seedh Me) ===
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
   const ready = await dbGetAll('readyStock');
@@ -95,7 +101,9 @@ async function renderChallanModule() {
     <div class="card">
       <div class="card-head">
         <h2>5. Challan (Parcel ke Andar) & A5 Packing Slip</h2>
-        <button class="btn btn-light btn-sm" onclick="challanState.view='LIST'; renderChallanModule();">📜 Saved Challans (${allChallans.length})</button>
+        <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['challanListPager']; challanState.view='LIST'; renderChallanModule();">
+          📜 Saved Challans (${allChallans.length})
+        </button>
       </div>
 
       <div class="grid-2">
@@ -105,22 +113,17 @@ async function renderChallanModule() {
             ${firms.map((f) => `<option value="${f.id}">${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
           </select>
         </div>
-        <div class="grid-2">
-          <div><label>Challan No. *</label><input type="number" id="chNo" value="${nextChNo}" /></div>
-          <div><label>Date *</label><input type="date" id="chDate" value="${todayISO()}" /></div>
-        </div>
-      </div>
-
-      <div class="grid-2" style="margin-top:10px;">
+        <div><label>Challan No. *</label><input type="number" id="chNo" value="${nextChNo}" /></div>
+        <div><label>Date *</label><input type="date" id="chDate" value="${todayISO()}" /></div>
         <div>
-          <label>Party Name * (Chunte hi Order Rate & Details aayegi)</label>
+          <label>Party Name * (Order Rate Auto-Fetch)</label>
           <input id="chPartyName" list="chPartyList" placeholder="e.g. SHREE SHARDA SAREE" onchange="onChallanPartyChange()" />
           <datalist id="chPartyList">
             ${parties.map((p) => `<option value="${esc(p.name)}">`).join('')}
           </datalist>
         </div>
         <div>
-          <label>Order Form Link (Rate Auto-Fetch ke liye)</label>
+          <label>Order Form Link (Rate Auto-Fetch)</label>
           <select id="chOrderSelect" onchange="challanState.linkedOrderNo=this.value;">
             <option value="">-- Latest Order Auto-Check --</option>
           </select>
@@ -131,11 +134,11 @@ async function renderChallanModule() {
         <div><label>Transport</label><input id="chTransport" placeholder="e.g. VRL" /></div>
       </div>
 
-      <!-- Fast Barcode Scan / Design Add Box -->
+      <!-- Fast Barcode Scan Box -->
       <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:8px; margin:14px 0;">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
           <span style="font-size:12px; font-weight:700; color:#1e3a8a;">
-            Barcode Scan Karein ya Saree Chunein (Rate Order Form se Auto-Fetch hoga):
+            Barcode Scan Karein ya Saree Chunein (Enter = Aage | Khali me Backspace = Piche):
           </span>
           <label style="margin:0; font-size:12px; color:#1e3a8a; display:flex; align-items:center; gap:4px; cursor:pointer;">
             <input type="checkbox" id="chAutoScan1" style="width:auto;" /> Scan pe 1 Pcs Auto-Add
@@ -151,20 +154,19 @@ async function renderChallanModule() {
               ${ready.map((r) => `<option value="${esc(r.barcodeVal)}">${esc(r.designName)} (${esc(r.firmCode)}) - Stock: ${r.qty}</option>`).join('')}
             </datalist>
           </div>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-            <div><label>Qty (Pcs) *</label><input type="number" id="chItemQty" min="1" value="1" /></div>
-            <div>
-              <label>Rate (₹) * (Enter se Add)</label>
-              <input type="number" id="chItemRate" min="0" placeholder="Auto / Edit" data-custom-enter="1"
-                     onkeydown="if(event.key==='Enter'){ event.preventDefault(); addChallanRow(); }" />
-            </div>
+          <div><label>Qty (Pcs) *</label><input type="number" id="chItemQty" min="1" value="1" /></div>
+          <div>
+            <label>Rate (₹) * (Enter se Add)</label>
+            <input type="number" id="chItemRate" min="0" placeholder="Auto / Edit" data-custom-enter="1"
+                   onkeydown="if(event.key==='Enter'){ event.preventDefault(); addChallanRow(); }" />
+          </div>
+          <div>
+            <button type="button" class="btn btn-dark" style="height:40px;" onclick="addChallanRow()">+ Add Saree</button>
           </div>
         </div>
         <div id="chScanHint" style="font-size:12px; color:#15803d; margin-top:6px;"></div>
-        <button type="button" class="btn btn-dark btn-sm" style="margin-top:6px;" onclick="addChallanRow()">+ Add Saree</button>
       </div>
 
-      <!-- Challan Items Table -->
       <div style="overflow-x:auto;">
         <table>
           <thead><tr><th>S.No</th><th>Saree / Design</th><th>Firm</th><th>Pcs</th><th>Rate (₹)</th><th>Amount (₹)</th><th>X</th></tr></thead>
@@ -172,13 +174,14 @@ async function renderChallanModule() {
         </table>
       </div>
 
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; flex-wrap:wrap; gap:10px;">
-        <div style="font-size:16px; font-weight:800;">
+      <div class="grid-2" style="margin-top:12px;">
+        <div style="font-size:16px; font-weight:800; padding:8px 0;">
           Total Pcs: <span id="chTotalPcs" style="color:#1d4ed8;">0</span> &nbsp;|&nbsp;
-          Total Amount: <span id="chTotalAmt" style="color:#15803d;">₹0</span>
+          Amount: <span id="chTotalAmt" style="color:#15803d;">₹0</span>
         </div>
-        <div style="flex:1; min-width:200px;">
-          <input id="chRemarks" placeholder="Remarks (Optional)..." />
+        <div>
+          <label>Remarks (Optional)</label>
+          <input id="chRemarks" placeholder="Remarks..." />
         </div>
       </div>
 
@@ -192,7 +195,6 @@ async function renderChallanModule() {
   setTimeout(() => document.getElementById('chPartyName')?.focus(), 50);
 }
 
-// Party select karne par Address/Marka/Transport & uske Order Forms load karna
 async function onChallanPartyChange() {
   const partyName = document.getElementById('chPartyName').value.trim().toUpperCase();
   if (!partyName) return;
@@ -219,7 +221,6 @@ async function onChallanPartyChange() {
   }
 }
 
-// Order Form se Rate Fetch karne ka Helper
 async function findRateFromOrder(partyName, designName) {
   const orders = (await dbGetAll('orders'))
     .filter((o) => o.partyName.toUpperCase() === partyName.toUpperCase())
@@ -240,14 +241,12 @@ async function findRateFromOrder(partyName, designName) {
   return null;
 }
 
-// Scan / Enter Par Barcode Lookup + Auto Rate Fetch
 async function handleChallanScan() {
   const scanEl = document.getElementById('chScanInput');
   const raw = scanEl.value.trim().toUpperCase();
   if (!raw) return;
 
   const readyAll = await dbGetAll('readyStock');
-  // Match "RASHMIKA KT" or just "RASHMIKA"
   let matched = readyAll.find((r) => r.barcodeVal.toUpperCase() === raw);
   if (!matched) matched = readyAll.find((r) => r.designName.toUpperCase() === raw);
 
@@ -268,7 +267,6 @@ async function handleChallanScan() {
     hint.textContent = `✓ ${designName} (${firmCode}) | Ready Stock: ${availQty} Pcs | Order me rate nahi mila (khud daalein)`;
   }
 
-  // Agar "Auto-Add 1 Pc on Scan" ON hai aur rate mil gaya
   if (document.getElementById('chAutoScan1').checked && rateInfo) {
     document.getElementById('chItemQty').value = 1;
     await addChallanRow();
@@ -301,7 +299,6 @@ async function addChallanRow() {
   const firmCode = matched ? matched.firmCode : (raw.split(' ')[1] || (activeFirm ? activeFirm.shortCode : 'KT'));
   const skuKey = `${designName}__${firmCode}`;
 
-  // Agar wahi design & rate pehle se table me hai toh qty merge kar do
   const existing = challanState.items.find((it) => it.skuKey === skuKey && it.rate === rate);
   if (existing) {
     existing.qty += qty;
@@ -365,7 +362,6 @@ async function saveChallanForm() {
     if (!partyName || !partyCity) return alert('Party Name aur City zaroori hai!');
     if (!challanState.items.length) return alert('Kam se kam 1 Saree add karein!');
 
-    // Ready Stock Check & Minus (-)
     for (const it of challanState.items) {
       const r = await dbGet('readyStock', it.skuKey);
       const avail = r ? r.qty : 0;
@@ -393,8 +389,8 @@ async function saveChallanForm() {
 
     const choice = prompt(
       `✅ Challan #${challanNo} Save ho gaya!\n` +
-      `1 likhein -> Challan Print/PDF (Parcel ke Andar)\n` +
-      `2 likhein -> A5 Packing Slip Print (Parcel ke Bahar)\n` +
+      `1 likhein -> Challan Print (Half-A4)\n` +
+      `2 likhein -> A5 Packing Slip Print\n` +
       `(Cancel dabakar baad me Saved Challans se print karein)`,
       '1'
     );
@@ -406,32 +402,32 @@ async function saveChallanForm() {
   } catch (err) { alert('Challan Save Error: ' + err.message); }
 }
 
-// === PRINT 1: CHALLAN (Parcel ke Andar — Full Party + Rate Details) ===
+// === PRINT 1: CHALLAN (Half-A4 / A5 Landscape) ===
 async function printChallanById(id) {
   const c = await dbGet('challans', id);
   if (!c) return;
   const firm = (await dbGet('firms', Number(c.firmId))) || { name: 'SimpliTex Firm', address: '', phone: '', gstin: '' };
 
-  setPrintPageStyle('@media print { @page { size: A4; margin: 10mm; } }');
+  setPrintPageStyle('@media print { @page { size: A5 landscape; margin: 6mm; } body { margin: 0; } }');
 
   const root = document.getElementById('simplitexPrintRoot');
   root.innerHTML = `
-    <div style="font-family:Arial,sans-serif; padding:18px; border:2px solid #000; max-width:780px; margin:auto;">
-      <div style="display:flex; justify-content:space-between; border-bottom:2px solid #000; padding-bottom:10px;">
+    <div style="font-family:Arial,sans-serif; padding:10px; border:1.5px solid #000; max-width:196mm; margin:auto; font-size:11.5px;">
+      <div style="display:flex; justify-content:space-between; border-bottom:1.5px solid #000; padding-bottom:6px;">
         <div>
-          <div style="font-size:22px; font-weight:800;">${esc(firm.name)}</div>
-          <div style="font-size:12px;">${esc(firm.address || '')}</div>
-          ${firm.phone ? `<div style="font-size:12px;">Ph: ${esc(firm.phone)}</div>` : ''}
+          <div style="font-size:17px; font-weight:800;">${esc(firm.name)}</div>
+          <div style="font-size:11px;">${esc(firm.address || '')}</div>
+          ${firm.phone ? `<div style="font-size:11px;">Ph: ${esc(firm.phone)}</div>` : ''}
         </div>
-        <div style="text-align:center; border:1px solid #000; padding:4px 12px; height:fit-content; font-weight:800;">DELIVERY CHALLAN</div>
-        <div style="text-align:right; font-size:13px;">
+        <div style="text-align:center; border:1px solid #000; padding:3px 10px; height:fit-content; font-weight:800;">DELIVERY CHALLAN</div>
+        <div style="text-align:right; font-size:11.5px;">
           <div><b>Challan No.:</b> #${esc(c.challanNo)}</div>
           <div><b>Date:</b> ${esc(c.date)}</div>
           ${c.orderNo ? `<div><b>Order Ref:</b> #${esc(c.orderNo)}</div>` : ''}
         </div>
       </div>
 
-      <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; padding:10px 0; border-bottom:1px solid #000; font-size:13px;">
+      <div style="display:grid; grid-template-columns:2fr 1fr; gap:8px; padding:6px 0; border-bottom:1px solid #000; font-size:11.5px;">
         <div>
           <div><b>M/s.:</b> ${esc(c.partyName)}</div>
           <div><b>Address:</b> ${esc(c.partyAddress || c.partyCity)}</div>
@@ -442,39 +438,39 @@ async function printChallanById(id) {
         </div>
       </div>
 
-      <table style="width:100%; border-collapse:collapse; margin-top:10px; font-size:13px;">
+      <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11.5px;">
         <thead>
           <tr style="background:#f3f4f6;">
-            <th style="border:1px solid #000; padding:6px;">S.No</th>
-            <th style="border:1px solid #000; padding:6px;">Saree / Design</th>
-            <th style="border:1px solid #000; padding:6px;">Qty (Pcs)</th>
-            <th style="border:1px solid #000; padding:6px;">Rate (₹)</th>
-            <th style="border:1px solid #000; padding:6px;">Amount (₹)</th>
+            <th style="border:1px solid #000; padding:4px;">S.No</th>
+            <th style="border:1px solid #000; padding:4px;">Saree / Design</th>
+            <th style="border:1px solid #000; padding:4px;">Qty (Pcs)</th>
+            <th style="border:1px solid #000; padding:4px;">Rate (₹)</th>
+            <th style="border:1px solid #000; padding:4px;">Amount (₹)</th>
           </tr>
         </thead>
         <tbody>
           ${c.items.map((it, i) => `
             <tr>
-              <td style="border:1px solid #000; padding:6px; text-align:center;">${i + 1}</td>
-              <td style="border:1px solid #000; padding:6px;"><b>${esc(it.designName)}</b> <small>(${esc(it.firmCode)})</small></td>
-              <td style="border:1px solid #000; padding:6px; text-align:center;"><b>${it.qty}</b></td>
-              <td style="border:1px solid #000; padding:6px; text-align:right;">₹${it.rate}</td>
-              <td style="border:1px solid #000; padding:6px; text-align:right;"><b>₹${it.amount.toLocaleString('en-IN')}</b></td>
+              <td style="border:1px solid #000; padding:4px; text-align:center;">${i + 1}</td>
+              <td style="border:1px solid #000; padding:4px;"><b>${esc(it.designName)}</b> <small>(${esc(it.firmCode)})</small></td>
+              <td style="border:1px solid #000; padding:4px; text-align:center;"><b>${it.qty}</b></td>
+              <td style="border:1px solid #000; padding:4px; text-align:right;">₹${it.rate}</td>
+              <td style="border:1px solid #000; padding:4px; text-align:right;"><b>₹${it.amount.toLocaleString('en-IN')}</b></td>
             </tr>
           `).join('')}
         </tbody>
         <tfoot>
           <tr style="background:#f3f4f6; font-weight:800;">
-            <td colspan="2" style="border:1px solid #000; padding:8px; text-align:right;">TOTAL</td>
-            <td style="border:1px solid #000; padding:8px; text-align:center;">${c.totalPcs} Pcs</td>
-            <td style="border:1px solid #000; padding:8px;"></td>
-            <td style="border:1px solid #000; padding:8px; text-align:right;">₹${Number(c.totalAmount || 0).toLocaleString('en-IN')}</td>
+            <td colspan="2" style="border:1px solid #000; padding:5px; text-align:right;">TOTAL</td>
+            <td style="border:1px solid #000; padding:5px; text-align:center;">${c.totalPcs} Pcs</td>
+            <td style="border:1px solid #000; padding:5px;"></td>
+            <td style="border:1px solid #000; padding:5px; text-align:right;">₹${Number(c.totalAmount || 0).toLocaleString('en-IN')}</td>
           </tr>
         </tfoot>
       </table>
 
-      ${c.remarks ? `<div style="margin-top:8px; font-size:12px;"><b>Remarks:</b> ${esc(c.remarks)}</div>` : ''}
-      <div style="display:flex; justify-content:space-between; margin-top:28px; font-size:12px;">
+      ${c.remarks ? `<div style="margin-top:6px; font-size:11px;"><b>Remarks:</b> ${esc(c.remarks)}</div>` : ''}
+      <div style="display:flex; justify-content:space-between; margin-top:16px; font-size:11px;">
         <div>Receiver Sign</div>
         <div><b>For: ${esc(firm.name)}</b></div>
       </div>
@@ -483,7 +479,7 @@ async function printChallanById(id) {
   setTimeout(() => window.print(), 150);
 }
 
-// === PRINT 2: A5 PACKING SLIP (Parcel ke Bahar Chipkegi — NO PARTY NAME!) ===
+// === PRINT 2: A5 PACKING SLIP (NO PARTY NAME!) ===
 async function printA5PackingSlipById(id) {
   const c = await dbGet('challans', id);
   if (!c) return;
@@ -538,7 +534,6 @@ async function printA5PackingSlipById(id) {
   setTimeout(() => window.print(), 150);
 }
 
-// === GALTI SUDHAR: CHALLAN DELETE & STOCK WAPAS ===
 async function reverseChallanById(id) {
   try {
     const c = await dbGet('challans', id);
