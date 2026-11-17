@@ -1,10 +1,92 @@
-// === SimpliTex Core App v2 (Fast DB Counts, Backup Reminder, Year Closing & Tally Keyboard) ===
+// === SimpliTex Core App v3 (Tally Company Loader, Fast DB Counts, Backup Reminder, Year Closing & Tally Keyboard) ===
 const MASTER_SECRET = 'SIMPLITEX_MAU_2026_SECRET';
 const JW_POOL_KEY = '__JW_POOL__';
 let stockTabMode = 'BUNKAR'; // 'BUNKAR' | 'JW_WAPSI' | 'BARCODE'
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+
+// 0. TALLY-STYLE COMPANY LOADING SCREEN
+function ensureTallyLoader() {
+  let el = document.getElementById('stxTallyLoader');
+  if (el) return el;
+
+  el = document.createElement('div');
+  el.id = 'stxTallyLoader';
+  el.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:99999',
+    'background:#0b0d12', 'color:#f9fafb',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'padding:20px', 'font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif',
+    'transition:opacity 0.28s ease'
+  ].join(';');
+
+  el.innerHTML = `
+    <div style="width:100%; max-width:400px; background:#111827; border:1px solid #374151; border-radius:14px; padding:26px 22px; text-align:center; box-shadow:0 20px 50px rgba(0,0,0,0.6);">
+      <img src="./icon-192.png" alt="SimpliTex" style="width:64px; height:64px; border-radius:14px; margin-bottom:10px; border:1px solid #374151;" />
+      <div style="font-size:22px; font-weight:800; letter-spacing:0.5px;">SimpliTex ERP</div>
+      <div id="stxLoadCompany" style="font-size:13px; color:#fbbf24; font-weight:700; margin-top:4px; min-height:18px;">
+        Loading Company...
+      </div>
+
+      <div style="background:#1f2937; border-radius:999px; height:10px; overflow:hidden; margin:18px 0 8px; border:1px solid #374151;">
+        <div id="stxLoadBar" style="width:10%; height:100%; background:linear-gradient(90deg,#22c55e,#4ade80); transition:width 0.25s ease;"></div>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; font-size:12px; color:#9ca3af;">
+        <span id="stxLoadMsg">Starting SimpliTex...</span>
+        <b id="stxLoadPct" style="color:#f9fafb;">10%</b>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(el);
+  return el;
+}
+
+function showTallyLoader(companyText, msg, pct) {
+  const el = ensureTallyLoader();
+  el.classList.remove('hidden');
+  el.style.display = 'flex';
+  el.style.opacity = '1';
+  setTallyLoader(companyText, msg, pct);
+}
+
+function setTallyLoader(companyText, msg, pct) {
+  const cEl = document.getElementById('stxLoadCompany');
+  const mEl = document.getElementById('stxLoadMsg');
+  const bEl = document.getElementById('stxLoadBar');
+  const pEl = document.getElementById('stxLoadPct');
+  if (companyText && cEl) cEl.textContent = companyText;
+  if (msg && mEl) mEl.textContent = msg;
+  if (typeof pct === 'number') {
+    if (bEl) bEl.style.width = pct + '%';
+    if (pEl) pEl.textContent = pct + '%';
+  }
+}
+
+function hideTallyLoader(immediate) {
+  const el = document.getElementById('stxTallyLoader');
+  if (!el) return;
+  if (immediate) {
+    el.style.display = 'none';
+    el.classList.add('hidden');
+    return;
+  }
+  el.style.opacity = '0';
+  setTimeout(() => {
+    el.style.display = 'none';
+    el.classList.add('hidden');
+  }, 280);
+}
+
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Page open hote hi turant loader screen dikha dein
+if (document.body) {
+  showTallyLoader('Initializing Company...', 'Starting SimpliTex...', 10);
 }
 
 // 1. Pure JS Signature (100% Offline)
@@ -369,6 +451,8 @@ function focusPrevField(currentEl) {
 }
 
 document.addEventListener('keydown', (e) => {
+  const loader = document.getElementById('stxTallyLoader');
+  if (loader && !loader.classList.contains('hidden')) return;
   if (!document.getElementById('lockScreen').classList.contains('hidden')) return;
 
   if (e.altKey) {
@@ -480,6 +564,7 @@ async function loadFirms() {
 
   document.getElementById('activeFirmLabel').textContent =
     firms.length ? firms.map((f) => f.shortCode).join(' / ') + ' — Saree ERP' : 'Settings me Firm add karein';
+  return firms;
 }
 
 // 7. Backup, Reminder, Year Closing & Fast Dashboard
@@ -585,12 +670,36 @@ window.addEventListener('online', updateNetBadge);
 window.addEventListener('offline', updateNetBadge);
 
 async function initApp() {
-  updateNetBadge();
-  if (!checkLicense()) return;
-  await openDB();
-  await loadFirms();
-  await refreshDashboard();
-  renderSettingsBackupExtras();
+  try {
+    showTallyLoader('SimpliTex ERP', 'Checking License...', 20);
+    updateNetBadge();
+    if (!checkLicense()) {
+      hideTallyLoader(true);
+      return;
+    }
+
+    setTallyLoader(null, 'Opening Company Database...', 45);
+    await openDB();
+    await sleepMs(120);
+
+    setTallyLoader(null, 'Loading Company & Masters...', 70);
+    const firms = await loadFirms();
+    const companyTitle = firms.length
+      ? 'Company: ' + firms.map((f) => f.name).join(' / ')
+      : 'SimpliTex Saree Wholesale ERP';
+    setTallyLoader(companyTitle, 'Syncing Live Stock & Registers...', 90);
+    await sleepMs(120);
+
+    await refreshDashboard();
+    renderSettingsBackupExtras();
+
+    setTallyLoader(companyTitle, 'Company Loaded — Ready!', 100);
+    await sleepMs(220);
+    hideTallyLoader(false);
+  } catch (err) {
+    hideTallyLoader(true);
+    alert('App Loading Error: ' + err.message);
+  }
 }
 
 window.addEventListener('DOMContentLoaded', initApp);
