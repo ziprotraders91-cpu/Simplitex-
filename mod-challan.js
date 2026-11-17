@@ -1,4 +1,4 @@
-// === SimpliTex Module 5 & 6: Challan (Half-A4) & A5 Packing Slip (Pending Order Tracker + Auto-Hide Complete) ===
+// === SimpliTex Module 5 & 6 v2: Challan & A5 Packing Slip (Fast Indexed + Pending Order Tracker + Auto-Hide) ===
 
 let challanState = {
   view: 'FORM',
@@ -129,24 +129,33 @@ async function renderChallanModule() {
     return;
   }
 
-  // === VIEW 2: NEW CHALLAN FORM ===
+  // === VIEW 2: NEW CHALLAN FORM (Fast Count & Next Challan No) ===
   challanState.loadedParty = '';
   challanState.partyOrders = [];
+  challanState.allChallans = [];
   challanState.linkedOrderNo = '';
 
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
   const ready = await dbGetAll('readyStock');
-  const allChallans = await dbGetAll('challans');
-  challanState.allChallans = allChallans;
-  const nextChNo = allChallans.length ? Math.max(...allChallans.map((c) => Number(c.challanNo) || 0)) + 1 : 1;
+
+  let totalChallansCount = 0;
+  let nextChNo = 1;
+  if (typeof dbCount === 'function' && typeof dbGetMaxField === 'function') {
+    totalChallansCount = await dbCount('challans');
+    nextChNo = (await dbGetMaxField('challans', 'challanNo')) + 1;
+  } else {
+    const allChallans = await dbGetAll('challans');
+    totalChallansCount = allChallans.length;
+    nextChNo = allChallans.length ? Math.max(...allChallans.map((c) => Number(c.challanNo) || 0)) + 1 : 1;
+  }
 
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
         <h2>5. Challan (Parcel ke Andar) & A5 Packing Slip</h2>
         <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['challanListPager']; challanState.view='LIST'; renderChallanModule();">
-          📜 Saved Challans (${allChallans.length})
+          📜 Saved Challans (${totalChallansCount})
         </button>
       </div>
 
@@ -256,19 +265,23 @@ async function onChallanPartyChange() {
     document.getElementById('chTransport').value = p.transport || '';
   }
 
-  const allOrders = await dbGetAll('orders');
-  const allChallans = await dbGetAll('challans');
-  challanState.allChallans = allChallans;
+  // Fast Indexed Query: Sirf is party ke orders aur challans load honge
+  const partyOrdersRaw = (typeof dbGetByIndex === 'function')
+    ? await dbGetByIndex('orders', 'partyName', partyName)
+    : (await dbGetAll('orders')).filter((o) => o.partyName.toUpperCase() === partyName);
 
-  const partyOrders = allOrders
-    .filter((o) => o.partyName.toUpperCase() === partyName)
-    .sort((a, b) => b.id - a.id);
+  const partyChallansRaw = (typeof dbGetByIndex === 'function')
+    ? await dbGetByIndex('challans', 'partyName', partyName)
+    : (await dbGetAll('challans')).filter((c) => (c.partyName || '').toUpperCase() === partyName);
+
+  const partyOrders = partyOrdersRaw.sort((a, b) => b.id - a.id);
   challanState.partyOrders = partyOrders;
+  challanState.allChallans = partyChallansRaw;
 
   // Sirf PENDING orders hi dropdown me rakhein (Complete orders dropdown se hata diye jayenge)
   const pendingOrders = [];
   partyOrders.forEach((o) => {
-    const st = window.stxComputeOrderStatus(o, allChallans);
+    const st = window.stxComputeOrderStatus(o, partyChallansRaw);
     if (!st.isComplete) pendingOrders.push({ order: o, status: st });
   });
 
@@ -387,9 +400,16 @@ function renderChallanOrderTracker() {
 }
 
 async function findRateFromOrder(partyName, designName) {
-  const orders = (await dbGetAll('orders'))
-    .filter((o) => o.partyName.toUpperCase() === partyName.toUpperCase())
-    .sort((a, b) => b.id - a.id);
+  const pUpper = partyName.toUpperCase();
+  let orders;
+  if (challanState.loadedParty === pUpper && Array.isArray(challanState.partyOrders)) {
+    orders = challanState.partyOrders;
+  } else {
+    const raw = (typeof dbGetByIndex === 'function')
+      ? await dbGetByIndex('orders', 'partyName', pUpper)
+      : (await dbGetAll('orders')).filter((o) => o.partyName.toUpperCase() === pUpper);
+    orders = raw.sort((a, b) => b.id - a.id);
+  }
 
   const linkedNo = document.getElementById('chOrderSelect')?.value;
   if (linkedNo) {
@@ -486,7 +506,6 @@ async function addChallanRow() {
   const firmCode = matched ? matched.firmCode : (raw.split(' ')[1] || (activeFirm ? activeFirm.shortCode : 'KT'));
   const skuKey = `${designName}__${firmCode}`;
 
-  // Order Pending Qty Warning Check
   const progress = getLinkedOrderLiveProgress();
   if (progress) {
     const orderItem = progress.liveItems.find((it) => it.name.toUpperCase() === designName.toUpperCase());
@@ -592,16 +611,19 @@ async function saveChallanForm() {
 
     if (typeof refreshDashboard === 'function') await refreshDashboard();
 
-    // Check Order Completion Status after saving
+    // Check Order Completion Status after saving (Fast Indexed Query)
     let orderMsg = '';
     if (orderNo) {
-      const allOrders = await dbGetAll('orders');
-      const allChallans = await dbGetAll('challans');
-      const linkedOrd = allOrders.find(
-        (o) => String(o.orderNo) === String(orderNo) && o.partyName.toUpperCase() === partyName
-      );
+      const partyOrders = (typeof dbGetByIndex === 'function')
+        ? await dbGetByIndex('orders', 'partyName', partyName)
+        : (await dbGetAll('orders')).filter((o) => o.partyName.toUpperCase() === partyName);
+      const partyChallans = (typeof dbGetByIndex === 'function')
+        ? await dbGetByIndex('challans', 'partyName', partyName)
+        : (await dbGetAll('challans')).filter((c) => (c.partyName || '').toUpperCase() === partyName);
+
+      const linkedOrd = partyOrders.find((o) => String(o.orderNo) === String(orderNo));
       if (linkedOrd) {
-        const st = window.stxComputeOrderStatus(linkedOrd, allChallans);
+        const st = window.stxComputeOrderStatus(linkedOrd, partyChallans);
         if (st.isComplete) {
           orderMsg = `\n🎉 Order #${orderNo} ab PURA HO CHUKA HAI! (Dropdown se hata diya gaya)\n`;
         } else {
