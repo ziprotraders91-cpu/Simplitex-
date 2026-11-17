@@ -1,4 +1,4 @@
-// === SimpliTex Core App v3 (Tally Company Loader, Fast DB Counts, Backup Reminder, Year Closing & Tally Keyboard) ===
+// === SimpliTex Core App v4 (Tally Loader + Auto Stock Audit + Year Closing Opening Snapshot) ===
 const MASTER_SECRET = 'SIMPLITEX_MAU_2026_SECRET';
 const JW_POOL_KEY = '__JW_POOL__';
 let stockTabMode = 'BUNKAR'; // 'BUNKAR' | 'JW_WAPSI' | 'BARCODE'
@@ -84,7 +84,6 @@ function sleepMs(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Page open hote hi turant loader screen dikha dein
 if (document.body) {
   showTallyLoader('Initializing Company...', 'Starting SimpliTex...', 10);
 }
@@ -319,7 +318,6 @@ async function openStockDrilldown(mode) {
         <button class="btn btn-light btn-sm" onclick="openTabByName('tab-dash')">← Back (Esc)</button>
       </div>
 
-      <!-- 3 Clean Top Filter Buttons -->
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
         <button type="button" class="btn" style="${btnStyle('BUNKAR')}" onclick="openStockDrilldown('BUNKAR')">
           🧵 Bunkar Stock (${bunkarTotal} Pcs)
@@ -409,7 +407,7 @@ async function openStockDrilldown(mode) {
   }
 }
 
-// 5. TALLY KEYBOARD ENGINE (Enter = Next, Backspace / Shift+Enter = Step Back, Esc = Back Screen)
+// 5. TALLY KEYBOARD ENGINE
 function moveListSelection(listEl, dir) {
   const rows = Array.from(listEl.querySelectorAll('.list-row'));
   if (!rows.length) return;
@@ -567,7 +565,7 @@ async function loadFirms() {
   return firms;
 }
 
-// 7. Backup, Reminder, Year Closing & Fast Dashboard
+// 7. Backup, Stock Audit Sync, Year Closing & Dashboard
 async function downloadBackup() {
   const json = await exportFullBackup();
   const blob = new Blob([json], { type: 'application/json' });
@@ -587,6 +585,18 @@ async function handleRestore(input) {
     alert('Backup Restore ho gaya!');
     initApp();
   } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function runManualStockSync() {
+  try {
+    if (typeof window.stxRecalculateAllStock === 'function') {
+      await window.stxRecalculateAllStock();
+    }
+    await refreshDashboard();
+    alert('✅ Stock Audit & Sync Complete! Saari entries ginke 100% sahi Live Stock aur Pending update ho gaya hai.');
+  } catch (err) {
+    alert('Stock Sync Error: ' + err.message);
+  }
 }
 
 function renderSettingsBackupExtras() {
@@ -617,29 +627,47 @@ function renderSettingsBackupExtras() {
 
   host.innerHTML = `
     <div style="font-size:12.5px; margin-bottom:10px;">${statusHtml}</div>
-    <div style="border-top:1px dashed #d1d5db; padding-top:10px;">
+    <div style="border-top:1px dashed #d1d5db; padding-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+      <button type="button" class="btn btn-dark btn-sm" onclick="runManualStockSync()">
+        🔄 Stock Audit & Sync (Hisab Verify Karein)
+      </button>
       <button type="button" class="btn btn-light btn-sm" onclick="startYearClosing()">
         🗓️ Year Closing (Backup Le Kar Purane Bills Clear Karein)
       </button>
-      <div style="font-size:11.5px; color:#6b7280; margin-top:4px;">
-        *Isse pehle poora Backup download hoga, phir sirf purane Orders/Challans/Ledger saaf honge — aapka Live Stock, Parties, Designs aur Pending Karigar 100% safe rahenge.
-      </div>
+    </div>
+    <div style="font-size:11.5px; color:#6b7280; margin-top:6px;">
+      *Year Closing me pehle Backup download hoga, phir aapka Live Stock Opening Balance ban kar save rahega aur sirf purane Bills/Ledger saaf honge.
     </div>
   `;
 }
 
 async function startYearClosing() {
-  if (!confirm('🗓️ Kya aap Naya Saal (Year Closing) shuru karna chahte hain?\nPehle aapka poora Backup (.json) download hoga, phir purane Orders, Challans, Barcoding Logs aur Job Work Ledger saaf honge.\n(Aapka Live Stock, Parties, Designs aur Karigar Pending SAFE rahenge.)')) return;
+  if (!confirm('🗓️ Kya aap Naya Saal (Year Closing) shuru karna chahte hain?\nPehle aapka poora Backup (.json) download hoga, phir aapke Live Stock & Pending ko naye saal ka Opening Stock bana kar purane Bills/Ledger saaf kiye jayenge.')) return;
   const check = prompt('Confirm karne ke liye "CLOSE" likhein:');
   if (!check || check.trim().toUpperCase() !== 'CLOSE') return alert('Year Closing cancel kar diya gaya.');
 
   try {
+    if (typeof window.stxRecalculateAllStock === 'function') {
+      await window.stxRecalculateAllStock();
+    }
     await downloadBackup();
+
+    // Naye saal ke liye Opening Stock snapshot save karein
+    const openingSnapshot = {
+      bunkarStock: (await dbGetAll('bunkarStock')).filter((b) => b.qty > 0),
+      jobWorkPending: (await dbGetAll('jobWorkPending')).filter((p) => p.qty > 0),
+      readyStock: (await dbGetAll('readyStock')).filter((r) => r.qty > 0)
+    };
+    localStorage.setItem('simplitex_opening_stock', JSON.stringify(openingSnapshot));
+
     if (typeof clearTransactionStoresForNewYear === 'function') {
       await clearTransactionStoresForNewYear();
     }
+    if (typeof window.stxRecalculateAllStock === 'function') {
+      await window.stxRecalculateAllStock();
+    }
     if (typeof refreshDashboard === 'function') await refreshDashboard();
-    alert('✅ Poora Backup download ho gaya aur Naya Saal ready hai! Live Stock aur Masters bilkul safe hain.');
+    alert('✅ Poora Backup download ho gaya aur Naya Saal ready hai! Live Stock Opening Balance ke roop me bilkul safe hai.');
   } catch (err) {
     alert('Year Closing Error: ' + err.message);
   }
@@ -671,30 +699,34 @@ window.addEventListener('offline', updateNetBadge);
 
 async function initApp() {
   try {
-    showTallyLoader('SimpliTex ERP', 'Checking License...', 20);
+    showTallyLoader('SimpliTex ERP', 'Checking License...', 15);
     updateNetBadge();
     if (!checkLicense()) {
       hideTallyLoader(true);
       return;
     }
 
-    setTallyLoader(null, 'Opening Company Database...', 45);
+    setTallyLoader(null, 'Opening Company Database...', 40);
     await openDB();
-    await sleepMs(120);
+    await sleepMs(100);
 
-    setTallyLoader(null, 'Loading Company & Masters...', 70);
+    setTallyLoader(null, 'Loading Company & Masters...', 65);
     const firms = await loadFirms();
     const companyTitle = firms.length
       ? 'Company: ' + firms.map((f) => f.name).join(' / ')
       : 'SimpliTex Saree Wholesale ERP';
-    setTallyLoader(companyTitle, 'Syncing Live Stock & Registers...', 90);
-    await sleepMs(120);
+
+    setTallyLoader(companyTitle, 'Verifying & Syncing Live Stock...', 85);
+    if (typeof window.stxRecalculateAllStock === 'function') {
+      await window.stxRecalculateAllStock();
+    }
+    await sleepMs(100);
 
     await refreshDashboard();
     renderSettingsBackupExtras();
 
     setTallyLoader(companyTitle, 'Company Loaded — Ready!', 100);
-    await sleepMs(220);
+    await sleepMs(200);
     hideTallyLoader(false);
   } catch (err) {
     hideTallyLoader(true);
