@@ -1,9 +1,8 @@
-// === SimpliTex Module 3: Order Form (Photo Format + Dynamic Firm + Fold Mishri) ===
+// === SimpliTex Module 3: Order Form (Aligned Boxes + Universal Search + 15-Row Pager) ===
 
-let orderState = { view: 'FORM', items: [], editId: null };
+let orderState = { view: 'FORM', items: [] };
 
-// Print CSS & Print Container ek baar inject karna
-function ensureOrderPrintSetup() {
+function ensureOrderPrintSetup(pageCss) {
   if (!document.getElementById('simplitexPrintRoot')) {
     const div = document.createElement('div');
     div.id = 'simplitexPrintRoot';
@@ -21,9 +20,17 @@ function ensureOrderPrintSetup() {
     `;
     document.head.appendChild(st);
   }
+  if (pageCss) {
+    let pageSt = document.getElementById('simplitexDynamicPageCSS');
+    if (!pageSt) {
+      pageSt = document.createElement('style');
+      pageSt.id = 'simplitexDynamicPageCSS';
+      document.head.appendChild(pageSt);
+    }
+    pageSt.textContent = pageCss;
+  }
 }
 
-// Chained Hooks (taaki Module 1 & 2 ka hook kharab na ho)
 const _prevTabHookOrder = window.onTabChanged;
 window.onTabChanged = function (tabId) {
   if (_prevTabHookOrder) _prevTabHookOrder(tabId);
@@ -50,6 +57,7 @@ async function renderOrderModule() {
   ensureOrderPrintSetup();
   const box = document.getElementById('tab-order');
 
+  // === SAVED ORDERS LIST (Universal Search + 15-Row Pagination) ===
   if (orderState.view === 'LIST') {
     const orders = (await dbGetAll('orders')).sort((a, b) => b.id - a.id);
     const firms = await dbGetAll('firms');
@@ -57,47 +65,50 @@ async function renderOrderModule() {
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>Saved Order Forms (${orders.length})</h2>
+          <h2>📋 Saved Order Forms (${orders.length})</h2>
           <div>
-            <button class="btn btn-dark btn-sm" onclick="orderState.view='FORM'; orderState.items=[]; orderState.editId=null; renderOrderModule();">+ Naya Order</button>
+            <button class="btn btn-dark btn-sm" onclick="orderState.view='FORM'; orderState.items=[]; renderOrderModule();">+ Naya Order</button>
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
-        <div style="overflow-x:auto;">
-          <table>
-            <thead>
-              <tr>
-                <th>Order #</th><th>Date</th><th>Firm</th><th>Party & City</th>
-                <th>Items</th><th>Pack / Fold</th><th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${orders.map((o) => {
-                const f = firms.find((x) => x.id === Number(o.firmId));
-                return `
-                  <tr>
-                    <td><b>#${esc(o.orderNo)}</b></td>
-                    <td>${esc(o.date)}</td>
-                    <td><b>${esc(f ? f.shortCode : '-')}</b></td>
-                    <td><b>${esc(o.partyName)}</b><br/><small>${esc(o.partyCity || '')}</small></td>
-                    <td>${o.items.length} Designs</td>
-                    <td>${esc(o.packingType || '')} / <b>${esc(o.folderName || '')}</b></td>
-                    <td style="white-space:nowrap;">
-                      <button class="btn btn-dark btn-sm" onclick="printOrderById(${o.id})">🖨️ Print/PDF</button>
-                      <button class="btn btn-danger btn-sm" onclick="deleteOrderById(${o.id})">X</button>
-                    </td>
-                  </tr>
-                `;
-              }).join('') || '<tr><td colspan="7">Abhi koi Order save nahi hai</td></tr>'}
-            </tbody>
-          </table>
-        </div>
+        <div id="ordersListPager"></div>
       </div>
     `;
+
+    mountPagedList({
+      id: 'ordersListPager',
+      items: orders,
+      perPage: 15,
+      placeholder: '🔍 Order No., Party, City, Transport, Saree ya Folder search karein...',
+      headHtml: '<tr><th>Order #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Items</th><th>Pack / Fold</th><th>Action</th></tr>',
+      getSearchText: (o) => {
+        const f = firms.find((x) => x.id === Number(o.firmId));
+        const itemNames = (o.items || []).map((it) => it.name).join(' ');
+        return `${o.orderNo} ${o.date} ${f ? f.shortCode : ''} ${o.partyName} ${o.partyCity || ''} ${o.transport || ''} ${o.folderName || ''} ${itemNames}`;
+      },
+      renderRow: (o) => {
+        const f = firms.find((x) => x.id === Number(o.firmId));
+        return `
+          <tr>
+            <td><b>#${esc(o.orderNo)}</b></td>
+            <td style="white-space:nowrap;">${esc(o.date)}</td>
+            <td><b>${esc(f ? f.shortCode : '-')}</b></td>
+            <td><b>${esc(o.partyName)}</b><br/><small>${esc(o.partyCity || '')}</small></td>
+            <td>${(o.items || []).length} Designs</td>
+            <td>${esc(o.packingType || '')} / <b>${esc(o.folderName || '')}</b></td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-dark btn-sm" onclick="printOrderById(${o.id})">🖨️ Print</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteOrderById(${o.id})">X</button>
+            </td>
+          </tr>
+        `;
+      },
+      emptyHtml: '<tr><td colspan="7">Abhi koi Order save nahi hai</td></tr>'
+    });
     return;
   }
 
-  // === ORDER FORM VIEW ===
+  // === ORDER FORM VIEW (Aligned Boxes) ===
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
   const folders = await dbGetAll('folders');
@@ -109,16 +120,15 @@ async function renderOrderModule() {
     <div class="card">
       <div class="card-head">
         <h2>3. Order Form (Rate Fix & Order Entry)</h2>
-        <div>
-          <button class="btn btn-light btn-sm" onclick="orderState.view='LIST'; renderOrderModule();">📋 Saved Orders (${allOrders.length})</button>
-        </div>
+        <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['ordersListPager']; orderState.view='LIST'; renderOrderModule();">
+          📋 Saved Orders (${allOrders.length})
+        </button>
       </div>
 
       ${!firms.length ? `<div style="background:#fef2f2; color:#b91c1c; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px;">
-        ⚠️ Pehle <b>⚙️ Settings</b> me apni Firm (Kamran Traders / Indian Fabrics) add karein!
+        ⚠️ Pehle <b>⚙️ Settings</b> me apni Firm add karein!
       </div>` : ''}
 
-      <!-- Firm, Order No, Date -->
       <div class="grid-2">
         <div>
           <label>Firm Chunein *</label>
@@ -126,14 +136,8 @@ async function renderOrderModule() {
             ${firms.map((f) => `<option value="${f.id}">${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
           </select>
         </div>
-        <div class="grid-2">
-          <div><label>Order No. *</label><input type="number" id="ordNo" value="${nextOrderNo}" /></div>
-          <div><label>Date *</label><input type="date" id="ordDate" value="${todayISO()}" /></div>
-        </div>
-      </div>
-
-      <!-- Party M/s. & City -->
-      <div class="grid-2" style="margin-top:10px;">
+        <div><label>Order No. *</label><input type="number" id="ordNo" value="${nextOrderNo}" /></div>
+        <div><label>Date *</label><input type="date" id="ordDate" value="${todayISO()}" /></div>
         <div>
           <label>M/s. (Party Name) *</label>
           <input id="ordPartyName" list="ordPartyList" placeholder="e.g. SHREE SHARDA SAREE" onchange="autoFillPartyInOrder()" />
@@ -141,47 +145,41 @@ async function renderOrderModule() {
             ${parties.map((p) => `<option value="${esc(p.name)}">`).join('')}
           </datalist>
         </div>
-        <div>
-          <label>City / Address *</label>
-          <input id="ordPartyCity" placeholder="e.g. CHIPLOON" />
-        </div>
+        <div><label>City / Address *</label><input id="ordPartyCity" placeholder="e.g. CHIPLOON" /></div>
       </div>
 
-      <!-- Fast Keyboard Item Entry Box -->
+      <!-- Fast Keyboard Item Entry Box (Sabhi Boxes Ek Seedh Me) -->
       <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:8px; margin:14px 0;">
         <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:8px;">
-          Saree Add Karein (Har box me Enter dabate jayein — Rate yahin fix hoga):
+          Saree Add Karein (Enter = Aage | Khali Box me Backspace = Piche):
         </div>
         <div class="grid-2">
           <div>
             <label>Particulars (Saree / Design Name) *</label>
-            <input id="ordItemName" list="ordDesignList" placeholder="e.g. RASHMIKA, 6350, CHANDERI" />
+            <input id="ordItemName" list="ordDesignList" placeholder="e.g. RASHMIKA, 6350" />
             <datalist id="ordDesignList">
               ${designs.map((d) => `<option value="${esc(d.designName)}">`).join('')}
             </datalist>
           </div>
-          <div style="display:grid; grid-template-columns:1fr 90px 1fr; gap:6px;">
-            <div><label>Qty *</label><input type="number" id="ordItemQty" min="1" placeholder="32" /></div>
-            <div>
-              <label>Unit</label>
-              <select id="ordItemUnit">
-                <option value="Pcs">Pcs</option>
-                <option value="Set">Set</option>
-              </select>
-            </div>
-            <div><label>Rate (₹) *</label><input type="number" id="ordItemRate" min="1" placeholder="750" /></div>
+          <div><label>Qty *</label><input type="number" id="ordItemQty" min="1" placeholder="32" /></div>
+          <div>
+            <label>Unit</label>
+            <select id="ordItemUnit">
+              <option value="Pcs">Pcs</option>
+              <option value="Set">Set</option>
+            </select>
           </div>
+          <div><label>Rate (₹) *</label><input type="number" id="ordItemRate" min="1" placeholder="750" /></div>
           <div><label>Fold Size (Optional)</label><input id="ordItemFoldSize" placeholder="e.g. HANGER" /></div>
           <div>
-            <label>Cancelled Colour (Optional — Enter se Add)</label>
+            <label>Cancelled Colour (Enter se Add)</label>
             <input id="ordItemCancel" placeholder="e.g. B.Green Gold" data-custom-enter="1"
                    onkeydown="if(event.key==='Enter'){ event.preventDefault(); addOrderItem(); }" />
           </div>
         </div>
-        <button type="button" class="btn btn-dark btn-sm" style="margin-top:8px;" onclick="addOrderItem()">+ Add Saree Row</button>
+        <button type="button" class="btn btn-dark btn-sm" style="margin-top:10px;" onclick="addOrderItem()">+ Add Saree Row</button>
       </div>
 
-      <!-- Items Table -->
       <div style="overflow-x:auto;">
         <table>
           <thead>
@@ -191,7 +189,7 @@ async function renderOrderModule() {
         </table>
       </div>
 
-      <!-- Bottom Section (Marka, Transport, Box/Paper/No Box, Folder, Remarks) -->
+      <!-- Bottom Section (Aligned) -->
       <div style="background:#f9fafb; border:1px solid #d1d5db; padding:12px; border-radius:8px; margin-top:14px;">
         <div class="grid-2">
           <div><label>Marka / Through</label><input id="ordMarka" placeholder="e.g. SSS" /></div>
@@ -206,18 +204,18 @@ async function renderOrderModule() {
           </div>
           <div>
             <label>Folder / Fold * (e.g. Mishri)</label>
-            <div style="display:flex; gap:6px;">
-              <select id="ordFolder">
+            <div style="display:flex; gap:6px; align-items:stretch;">
+              <select id="ordFolder" style="flex:1;">
                 ${folders.map((f) => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('')}
               </select>
               <button type="button" class="btn btn-dark btn-sm" onclick="addNewFolderOption()">+ Add</button>
             </div>
           </div>
-        </div>
-        <div style="margin-top:10px;">
-          <label>Remarks</label>
-          <input id="ordRemarks" placeholder="Koi special instruction..." data-custom-enter="1"
-                 onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveOrderForm(); }" />
+          <div style="grid-column: 1 / -1;">
+            <label>Remarks</label>
+            <input id="ordRemarks" placeholder="Koi special instruction..." data-custom-enter="1"
+                   onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveOrderForm(); }" />
+          </div>
         </div>
       </div>
 
@@ -303,40 +301,41 @@ function renderOrderItemsTable() {
 }
 
 async function saveOrderForm() {
-  const firmId = Number(document.getElementById('ordFirmId').value);
-  const orderNo = parseInt(document.getElementById('ordNo').value, 10);
-  const date = document.getElementById('ordDate').value || todayISO();
-  const partyName = document.getElementById('ordPartyName').value.trim().toUpperCase();
-  const partyCity = document.getElementById('ordPartyCity').value.trim().toUpperCase();
-  const marka = document.getElementById('ordMarka').value.trim().toUpperCase();
-  const transport = document.getElementById('ordTransport').value.trim().toUpperCase();
-  const packingType = document.getElementById('ordPacking').value;
-  const folderName = document.getElementById('ordFolder').value;
-  const remarks = document.getElementById('ordRemarks').value.trim();
+  try {
+    const firmId = Number(document.getElementById('ordFirmId').value);
+    const orderNo = parseInt(document.getElementById('ordNo').value, 10);
+    const date = document.getElementById('ordDate').value || todayISO();
+    const partyName = document.getElementById('ordPartyName').value.trim().toUpperCase();
+    const partyCity = document.getElementById('ordPartyCity').value.trim().toUpperCase();
+    const marka = document.getElementById('ordMarka').value.trim().toUpperCase();
+    const transport = document.getElementById('ordTransport').value.trim().toUpperCase();
+    const packingType = document.getElementById('ordPacking').value;
+    const folderName = document.getElementById('ordFolder').value;
+    const remarks = document.getElementById('ordRemarks').value.trim();
 
-  if (!firmId) return alert('Pehle Settings me Firm add karein!');
-  if (!partyName) return alert('Party Name (M/s.) daalna zaroori hai!');
-  if (!orderState.items.length) return alert('Kam se kam 1 Saree add karein!');
+    if (!firmId) return alert('Pehle Settings me Firm add karein!');
+    if (!partyName) return alert('Party Name (M/s.) daalna zaroori hai!');
+    if (!orderState.items.length) return alert('Kam se kam 1 Saree add karein!');
 
-  // Party Master me auto-save / update
-  const parties = await dbGetAll('parties');
-  const exParty = parties.find((p) => p.name.toUpperCase() === partyName);
-  const partyObj = exParty
-    ? { ...exParty, name: partyName, city: partyCity || exParty.city, marka: marka || exParty.marka, transport: transport || exParty.transport }
-    : { name: partyName, city: partyCity, address: partyCity, phone: '', marka, transport };
-  const savedPartyId = await dbPut('parties', partyObj);
+    const parties = await dbGetAll('parties');
+    const exParty = parties.find((p) => p.name.toUpperCase() === partyName);
+    const partyObj = exParty
+      ? { ...exParty, name: partyName, city: partyCity || exParty.city, marka: marka || exParty.marka, transport: transport || exParty.transport }
+      : { name: partyName, city: partyCity, address: partyCity, phone: '', marka, transport };
+    const savedPartyId = await dbPut('parties', partyObj);
 
-  const orderId = await dbPut('orders', {
-    orderNo, date, firmId, partyId: savedPartyId, partyName, partyCity,
-    items: orderState.items, marka, transport, packingType, folderName, remarks,
-    createdAt: Date.now()
-  });
+    const orderId = await dbPut('orders', {
+      orderNo, date, firmId, partyId: savedPartyId, partyName, partyCity,
+      items: orderState.items, marka, transport, packingType, folderName, remarks,
+      createdAt: Date.now()
+    });
 
-  if (confirm(`✅ Order #${orderNo} Save ho gaya! Kya abhi Print / PDF nikalna hai?`)) {
-    await printOrderById(orderId);
-  }
-  orderState.items = [];
-  renderOrderModule();
+    if (confirm(`✅ Order #${orderNo} Save ho gaya! Kya abhi Print / PDF nikalna hai?`)) {
+      await printOrderById(orderId);
+    }
+    orderState.items = [];
+    renderOrderModule();
+  } catch (err) { alert('Order Save Error: ' + err.message); }
 }
 
 async function deleteOrderById(id) {
@@ -345,60 +344,60 @@ async function deleteOrderById(id) {
   renderOrderModule();
 }
 
-// === PRINT / PDF ORDER FORM (Photo Format) ===
+// === PRINT ORDER FORM (Half-A4 / A5 Landscape) ===
 async function printOrderById(id) {
-  ensureOrderPrintSetup();
+  ensureOrderPrintSetup('@media print { @page { size: A5 landscape; margin: 6mm; } body { margin: 0; } }');
   const o = await dbGet('orders', id);
   if (!o) return;
   const firm = (await dbGet('firms', Number(o.firmId))) || { name: 'SimpliTex Firm', address: '', phone: '', gstin: '' };
 
   const root = document.getElementById('simplitexPrintRoot');
   root.innerHTML = `
-    <div style="font-family:Arial,sans-serif; padding:18px; border:2px solid #000; max-width:780px; margin:auto;">
-      <div style="display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #000; padding-bottom:10px;">
+    <div style="font-family:Arial,sans-serif; padding:10px; border:1.5px solid #000; max-width:196mm; margin:auto; font-size:11.5px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; border-bottom:1.5px solid #000; padding-bottom:6px;">
         <div>
-          <div style="font-size:22px; font-weight:800; text-transform:uppercase;">${esc(firm.name)}</div>
-          <div style="font-size:12px;">${esc(firm.address || '')}</div>
-          ${firm.gstin ? `<div style="font-size:12px; font-weight:700;">GSTIN: ${esc(firm.gstin)}</div>` : ''}
+          <div style="font-size:17px; font-weight:800; text-transform:uppercase;">${esc(firm.name)}</div>
+          <div style="font-size:11px;">${esc(firm.address || '')}</div>
+          ${firm.gstin ? `<div style="font-size:11px; font-weight:700;">GSTIN: ${esc(firm.gstin)}</div>` : ''}
         </div>
-        <div style="text-align:center; border:1px solid #000; padding:4px 12px; font-weight:800;">ORDER FORM</div>
-        <div style="text-align:right; font-size:13px;">
+        <div style="text-align:center; border:1px solid #000; padding:3px 10px; font-weight:800;">ORDER FORM</div>
+        <div style="text-align:right; font-size:11.5px;">
           <div><b>Order No.:</b> ${esc(o.orderNo)}</div>
           <div><b>Date:</b> ${esc(o.date)}</div>
           ${firm.phone ? `<div><b>Ph:</b> ${esc(firm.phone)}</div>` : ''}
         </div>
       </div>
 
-      <div style="padding:10px 0; border-bottom:1px solid #000; font-size:14px;">
+      <div style="padding:6px 0; border-bottom:1px solid #000; font-size:12.5px;">
         <b>M/s.:</b> ${esc(o.partyName)} &nbsp;&nbsp;|&nbsp;&nbsp; <b>City:</b> ${esc(o.partyCity || '')}
       </div>
 
-      <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:13px;">
+      <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11.5px;">
         <thead>
           <tr style="background:#f3f4f6;">
-            <th style="border:1px solid #000; padding:6px;">S.No</th>
-            <th style="border:1px solid #000; padding:6px;">Particulars</th>
-            <th style="border:1px solid #000; padding:6px;">Qty</th>
-            <th style="border:1px solid #000; padding:6px;">Rate</th>
-            <th style="border:1px solid #000; padding:6px;">Fold Size</th>
-            <th style="border:1px solid #000; padding:6px;">Cancelled Colour</th>
+            <th style="border:1px solid #000; padding:4px;">S.No</th>
+            <th style="border:1px solid #000; padding:4px;">Particulars</th>
+            <th style="border:1px solid #000; padding:4px;">Qty</th>
+            <th style="border:1px solid #000; padding:4px;">Rate</th>
+            <th style="border:1px solid #000; padding:4px;">Fold Size</th>
+            <th style="border:1px solid #000; padding:4px;">Cancelled Colour</th>
           </tr>
         </thead>
         <tbody>
           ${o.items.map((it, i) => `
             <tr>
-              <td style="border:1px solid #000; padding:6px; text-align:center;">${i + 1}</td>
-              <td style="border:1px solid #000; padding:6px;"><b>${esc(it.name)}</b></td>
-              <td style="border:1px solid #000; padding:6px;">${it.qty} ${esc(it.unit)}</td>
-              <td style="border:1px solid #000; padding:6px;">₹${it.rate}</td>
-              <td style="border:1px solid #000; padding:6px;">${esc(it.foldSize || '')}</td>
-              <td style="border:1px solid #000; padding:6px;">${esc(it.cancelColor || '')}</td>
+              <td style="border:1px solid #000; padding:4px; text-align:center;">${i + 1}</td>
+              <td style="border:1px solid #000; padding:4px;"><b>${esc(it.name)}</b></td>
+              <td style="border:1px solid #000; padding:4px;">${it.qty} ${esc(it.unit)}</td>
+              <td style="border:1px solid #000; padding:4px;">₹${it.rate}</td>
+              <td style="border:1px solid #000; padding:4px;">${esc(it.foldSize || '')}</td>
+              <td style="border:1px solid #000; padding:4px;">${esc(it.cancelColor || '')}</td>
             </tr>
           `).join('')}
         </tbody>
       </table>
 
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px; font-size:13px; border:1px solid #000; padding:10px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; font-size:11.5px; border:1px solid #000; padding:6px;">
         <div><b>Marka / Through:</b> ${esc(o.marka || '-')}</div>
         <div><b>Transport:</b> ${esc(o.transport || '-')}</div>
         <div><b>Packing:</b> ${esc(o.packingType)}</div>
@@ -406,7 +405,7 @@ async function printOrderById(id) {
         <div style="grid-column:span 2;"><b>Remarks:</b> ${esc(o.remarks || '-')}</div>
       </div>
 
-      <div style="display:flex; justify-content:space-between; margin-top:26px; font-size:12px;">
+      <div style="display:flex; justify-content:space-between; margin-top:16px; font-size:11px;">
         <div>Subject to Mau Jurisdiction</div>
         <div><b>For: ${esc(firm.name)}</b></div>
       </div>
