@@ -6,7 +6,7 @@
   <title>SimpliTex - Saree Wholesale ERP</title>
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" href="./icon-192.png" />
-  <meta name="theme-color" content="#0b0d12" />
+  <meta name="theme-color" content="#0f172a" />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
@@ -16,9 +16,9 @@
     <div class="lock-box">
       <img src="./icon-192.png" alt="SimpliTex" />
       <h2 id="lockTitle" style="margin:4px 0;">SimpliTex Locked</h2>
-      <p id="lockMsg" style="font-size:13px; color:#6b7280;"></p>
-      <div style="background:#f3f4f6; padding:10px; border-radius:8px; margin:12px 0;">
-        <small style="color:#6b7280;">Device ID (Admin ko bhejein):</small>
+      <p id="lockMsg" style="font-size:13px; color:#64748b;"></p>
+      <div style="background:#f1f5f9; padding:10px; border-radius:8px; margin:12px 0;">
+        <small style="color:#64748b;">Device ID (Admin ko bhejein):</small>
         <div id="showDeviceId" style="font-weight:800; font-size:16px; letter-spacing:1px;"></div>
       </div>
       <input type="text" id="unlockCodeInput" placeholder="Unlock Code (e.g. 20261231-XXXXXX)" style="text-align:center; margin-bottom:10px;" />
@@ -32,7 +32,7 @@
       <img src="./icon-192.png" alt="S" />
       <div>
         <h1>SimpliTex</h1>
-        <small id="activeFirmLabel">Saree Management</small>
+        <small id="activeFirmLabel">Saree Wholesale ERP</small>
       </div>
     </div>
     <div>
@@ -41,30 +41,33 @@
     </div>
   </header>
 
-  <!-- Navigation Tabs (Alt+0 to Alt+6) -->
+  <!-- Navigation (Desktop Left Sidebar / Mobile Top Bar) -->
   <nav class="nav-bar" id="mainNav">
-    <button class="nav-btn active" onclick="openTab('tab-dash', this)">Gateway (Alt+0)</button>
-    <button class="nav-btn" onclick="openTab('tab-jobwork', this)">1. Job Work Out</button>
-    <button class="nav-btn" onclick="openTab('tab-inward', this)">2. Stock Inward</button>
-    <button class="nav-btn" onclick="openTab('tab-order', this)">3. Order Form</button>
-    <button class="nav-btn" onclick="openTab('tab-barcode', this)">4. Barcoding</button>
-    <button class="nav-btn" onclick="openTab('tab-challan', this)">5. Challan & Slip</button>
+    <button class="nav-btn active" onclick="openTab('tab-dash', this)">🏠 Gateway (Alt+0)</button>
+    <button class="nav-btn" onclick="openTab('tab-jobwork', this)">📤 1. Job Work Out</button>
+    <button class="nav-btn" onclick="openTab('tab-inward', this)">📥 2. Stock Inward</button>
+    <button class="nav-btn" onclick="openTab('tab-order', this)">📝 3. Order Form</button>
+    <button class="nav-btn" onclick="openTab('tab-barcode', this)">🏷️ 4. Barcoding</button>
+    <button class="nav-btn" onclick="openTab('tab-challan', this)">🚚 5. Challan & Slip</button>
+    <button id="navBtnStock" class="nav-btn" onclick="openStockDrilldown('BUNKAR'); this.classList.add('active');">📦 6. Live Stock</button>
+    <button id="navBtnReports" class="nav-btn" onclick="openPendingReports('ORDERS'); this.classList.add('active');">📊 Pending Reports</button>
+    <button id="navBtnParties" class="nav-btn" onclick="openPartyMaster(); this.classList.add('active');">👥 Party Master</button>
     <button class="nav-btn" onclick="openTab('tab-settings', this)">⚙️ Settings</button>
   </nav>
 
-  <!-- Main Content -->
+  <!-- Main Workspace -->
   <main class="container">
 
-    <!-- GATEWAY / DASHBOARD (Clean Total Stock + Tally Menu) -->
+    <!-- GATEWAY / DASHBOARD -->
     <section id="tab-dash" class="tab-sec">
       <div class="hero-stock" tabindex="0" onclick="openStockDrilldown()" onkeydown="if(event.key==='Enter') openStockDrilldown()">
         <div>
-          <div style="font-size:12px; color:#9ca3af; text-transform:uppercase; letter-spacing:1px;">
-            Total Dukan Live Stock (Click / Enter for Bunkar Detail)
+          <div style="font-size:11.5px; color:#94a3b8; text-transform:uppercase; letter-spacing:1px; font-weight:700;">
+            Total Dukan Live Stock (Click / Enter for Detail)
           </div>
-          <div class="big-num"><span id="statTotalStock">0</span> <span style="font-size:16px; font-weight:500;">Pcs</span></div>
+          <div class="big-num"><span id="statTotalStock">0</span> <span style="font-size:16px; font-weight:600; color:#cbd5e1;">Pcs</span></div>
         </div>
-        <div style="text-align:right; font-size:12px; color:#d1d5db;">
+        <div style="text-align:right; font-size:12.5px; color:#cbd5e1;">
           <div>Job Work Pending: <b id="statPendingJW" style="color:#fca5a5;">0</b></div>
           <div style="margin-top:4px;">Ready Barcoded: <b id="statReadyStock" style="color:#86efac;">0</b></div>
           <div style="margin-top:4px;">Total Challans: <b id="statChallans">0</b></div>
@@ -74,7 +77,7 @@
       <div class="card">
         <div class="card-head">
           <h2>Gateway of SimpliTex</h2>
-          <span class="shortcut-hint">↑↓ + Enter ya 1-7 Key dabayein</span>
+          <span class="shortcut-hint">↑↓ + Enter ya 0-9 Key dabayein</span>
         </div>
         <div class="list-menu kbd-list" id="gatewayMenu">
           <div class="list-row kbd-active" data-key="1" onclick="openTabByName('tab-jobwork')">
@@ -86,7 +89,7 @@
             <span class="badge">Key: 2</span>
           </div>
           <div class="list-row" data-key="3" onclick="openTabByName('tab-order')">
-            <span>3. Order Form</span>
+            <span>3. Order Form (Rate Fix)</span>
             <span class="badge">Key: 3</span>
           </div>
           <div class="list-row" data-key="4" onclick="openTabByName('tab-barcode')">
@@ -109,39 +112,13 @@
       </div>
     </section>
 
-    <!-- STOCK DRILL-DOWN (Bunkar Wise + Job Work Pool + Ready Stock) -->
-    <section id="tab-stock-detail" class="tab-sec hidden">
-      <div class="card">
-        <div class="card-head">
-          <h2>Dukan Live Stock Detail</h2>
-          <button class="btn btn-light btn-sm" onclick="openTabByName('tab-dash')">← Back (Esc)</button>
-        </div>
-
-        <h3 style="font-size:14px; margin:8px 0;">1. Bunkar-Wise Stock (Kora / Direct Baithak)</h3>
-        <table>
-          <thead><tr><th>Bunkar / Saree Naam</th><th>Available Pcs</th></tr></thead>
-          <tbody id="stockDetailBunkarBody"></tbody>
-        </table>
-
-        <h3 style="font-size:14px; margin:16px 0 6px;">2. Job Work se Wapas Pool (Ready for Next Work / Barcoding)</h3>
-        <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:10px 14px; border-radius:8px; font-weight:700; color:#1e3a8a;">
-          Total Job Work Returned Pool: <span id="stockDetailJWPool">0</span> Pcs
-        </div>
-
-        <h3 style="font-size:14px; margin:16px 0 6px;">3. Ready Barcoded Stock (Design Wise)</h3>
-        <table>
-          <thead><tr><th>Design & Firm</th><th>Available Pcs</th></tr></thead>
-          <tbody id="stockDetailReadyBody"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- Module Containers -->
+    <!-- Dynamic Module Sections -->
+    <section id="tab-stock-detail" class="tab-sec hidden"></section>
     <section id="tab-jobwork" class="tab-sec hidden"></section>
     <section id="tab-inward" class="tab-sec hidden"></section>
-    <section id="tab-order" class="tab-sec hidden"><div class="card"><h2>3. Order Form</h2><p>Loading...</p></div></section>
-    <section id="tab-barcode" class="tab-sec hidden"><div class="card"><h2>4. Barcoding</h2><p>Loading...</p></div></section>
-    <section id="tab-challan" class="tab-sec hidden"><div class="card"><h2>5. Challan & Packing Slip</h2><p>Loading...</p></div></section>
+    <section id="tab-order" class="tab-sec hidden"></section>
+    <section id="tab-barcode" class="tab-sec hidden"></section>
+    <section id="tab-challan" class="tab-sec hidden"></section>
 
     <!-- SETTINGS -->
     <section id="tab-settings" class="tab-sec hidden">
@@ -159,10 +136,12 @@
         <div style="margin-top:10px;"><label>Address</label><input id="firmAddress" placeholder="Sadar Chowk, Mau (U.P.)" /></div>
         <button class="btn btn-dark" style="margin-top:12px;" onclick="saveFirm()">+ Save Firm</button>
 
-        <table>
-          <thead><tr><th>Firm Name</th><th>Code</th><th>Mobile</th><th>Action</th></tr></thead>
-          <tbody id="firmTableBody"></tbody>
-        </table>
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table>
+            <thead><tr><th>Firm Name</th><th>Code</th><th>Mobile</th><th>Action</th></tr></thead>
+            <tbody id="firmTableBody"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="card">
