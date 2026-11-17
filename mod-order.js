@@ -1,6 +1,6 @@
-// === SimpliTex Module 3 v3: Order Form (Edit Order + Aligned Boxes + Fast Fulfillment Status) ===
+// === SimpliTex Module 3 v4: Order Form (Edit Order + Aligned Boxes + Fast Fulfillment Status + Multi-PC Order No Guard) ===
 
-let orderState = { view: 'FORM', items: [], filter: 'ALL', editId: null, origCreatedAt: null, draft: null };
+let orderState = { view: 'FORM', items: [], filter: 'ALL', editId: null, origCreatedAt: null, draft: null, autoOrderNo: null };
 
 window.stxComputeOrderStatus = function (order, allChallans) {
   const ordNo = String(order.orderNo);
@@ -94,6 +94,7 @@ window.onTabChanged = function (tabId) {
     orderState.editId = null;
     orderState.origCreatedAt = null;
     orderState.draft = null;
+    orderState.autoOrderNo = null;
     renderOrderModule();
   }
 };
@@ -107,6 +108,7 @@ window.handleModuleEscape = function () {
       orderState.editId = null;
       orderState.origCreatedAt = null;
       orderState.draft = null;
+      orderState.autoOrderNo = null;
       orderState.items = [];
       orderState.view = 'LIST';
       renderOrderModule();
@@ -171,7 +173,7 @@ async function renderOrderModule() {
         <div class="card-head">
           <h2>📋 Saved Order Forms (${orders.length})</h2>
           <div>
-            <button class="btn btn-dark btn-sm" onclick="orderState.view='FORM'; orderState.items=[]; orderState.editId=null; orderState.draft=null; renderOrderModule();">+ Naya Order</button>
+            <button class="btn btn-dark btn-sm" onclick="orderState.view='FORM'; orderState.items=[]; orderState.editId=null; orderState.draft=null; orderState.autoOrderNo=null; renderOrderModule();">+ Naya Order</button>
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
@@ -256,6 +258,7 @@ async function renderOrderModule() {
 
   const d = orderState.draft;
   const isEdit = !!orderState.editId;
+  orderState.autoOrderNo = isEdit ? null : nextOrderNo;
 
   const agentSet = new Set();
   parties.forEach((p) => { if (p.agent) agentSet.add(p.agent.toUpperCase()); });
@@ -386,6 +389,7 @@ async function editOrderById(id) {
   if (!o) return;
   orderState.editId = o.id;
   orderState.origCreatedAt = o.createdAt || Date.now();
+  orderState.autoOrderNo = null;
   orderState.items = (o.items || []).map((it) => ({ ...it }));
   orderState.draft = {
     firmId: o.firmId,
@@ -466,7 +470,7 @@ function renderOrderItemsTable() {
 async function saveOrderForm() {
   try {
     const firmId = Number(document.getElementById('ordFirmId').value);
-    const orderNo = parseInt(document.getElementById('ordNo').value, 10);
+    let orderNo = parseInt(document.getElementById('ordNo').value, 10);
     const date = document.getElementById('ordDate').value || todayISO();
     const partyName = document.getElementById('ordPartyName').value.trim().toUpperCase();
     const partyCity = document.getElementById('ordPartyCity').value.trim().toUpperCase();
@@ -481,6 +485,16 @@ async function saveOrderForm() {
     if (!partyName) return alert('Party Name (M/s.) daalna zaroori hai!');
     if (!folderName) return alert('Folder / Fold likhna zaroori hai (e.g. MISHRI)!');
     if (!orderState.items.length) return alert('Kam se kam 1 Saree add karein!');
+
+    const wasEdit = !!orderState.editId;
+
+    // Multi-PC Guard: Agar auto Order No. kisi aur PC par use ho gaya ho toh fresh number lein
+    if (!wasEdit && orderState.autoOrderNo !== null && orderNo === orderState.autoOrderNo) {
+      const existingSame = await dbGetByIndex('orders', 'orderNo', orderNo);
+      if (existingSame && existingSame.length > 0) {
+        orderNo = (await dbGetMaxField('orders', 'orderNo')) + 1;
+      }
+    }
 
     await dbPut('folders', { name: folderName });
 
@@ -497,7 +511,6 @@ async function saveOrderForm() {
       : { name: partyName, city: partyCity, address: partyCity, agent, phone: '', marka, transport };
     const savedPartyId = await dbPut('parties', partyObj);
 
-    const wasEdit = !!orderState.editId;
     const orderPayload = {
       orderNo, date, firmId, partyId: savedPartyId, partyName, partyCity, agent,
       items: orderState.items, marka, transport, packingType, folderName, remarks,
@@ -514,6 +527,7 @@ async function saveOrderForm() {
     orderState.editId = null;
     orderState.origCreatedAt = null;
     orderState.draft = null;
+    orderState.autoOrderNo = null;
     if (wasEdit) orderState.view = 'LIST';
     renderOrderModule();
   } catch (err) { alert('Order Save Error: ' + err.message); }
