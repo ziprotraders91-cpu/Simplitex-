@@ -1,7 +1,7 @@
 // === SimpliTex Module 4: Barcoding, Design Master & Sticker Print ===
 
 const _BC_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
-let bcState = { view: 'FORM', search: '' };
+let bcState = { view: 'FORM', search: '', designsCache: [], readyCache: [] };
 
 function ensureJsBarcodeLoaded() {
   if (typeof window.JsBarcode === 'function') return Promise.resolve(true);
@@ -37,6 +37,37 @@ window.handleModuleEscape = function () {
   return false;
 };
 
+function buildDesignRowsHTML(queryStr) {
+  const q = (queryStr || '').trim().toUpperCase();
+  const filtered = q
+    ? bcState.designsCache.filter((d) =>
+        d.designName.includes(q) || (d.specLine || '').toUpperCase().includes(q)
+      )
+    : bcState.designsCache;
+
+  return filtered.slice(0, 150).map((d) => {
+    const stList = bcState.readyCache.filter((r) => r.designName === d.designName && r.qty > 0);
+    const stockTxt = stList.length ? stList.map((r) => `${r.firmCode}: ${r.qty}`).join(', ') : '0';
+    return `
+      <tr>
+        <td><b>${esc(d.designName)}</b></td>
+        <td><small>${esc(d.specLine || '-')}</small></td>
+        <td><b>${esc(stockTxt)}</b></td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-dark btn-sm" onclick="quickReprintPrompt('${esc(d.designName)}','${esc(d.specLine || '')}')">🖨️ Sticker</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteDesign('${esc(d.designName)}')">X</button>
+        </td>
+      </tr>
+    `;
+  }).join('') || '<tr><td colspan="4">Koi Design nahi mila</td></tr>';
+}
+
+function filterDesignsLive(val) {
+  bcState.search = val;
+  const tbody = document.getElementById('bcDesignTableBody');
+  if (tbody) tbody.innerHTML = buildDesignRowsHTML(val);
+}
+
 async function renderBarcodeModule() {
   await openDB();
   if (typeof ensureOrderPrintSetup === 'function') ensureOrderPrintSetup();
@@ -44,48 +75,32 @@ async function renderBarcodeModule() {
 
   // === VIEW 1: DESIGN MASTER & READY STOCK ===
   if (bcState.view === 'DESIGNS') {
-    const designs = await dbGetAll('designs');
-    const ready = await dbGetAll('readyStock');
-    const q = bcState.search.trim().toUpperCase();
-    const filtered = q ? designs.filter((d) => d.designName.includes(q) || (d.specLine || '').toUpperCase().includes(q)) : designs;
+    bcState.designsCache = await dbGetAll('designs');
+    bcState.readyCache = await dbGetAll('readyStock');
 
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>🎨 Design Master (${designs.length} Designs)</h2>
+          <h2>🎨 Design Master (${bcState.designsCache.length} Designs)</h2>
           <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
         </div>
 
         <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
-          <input placeholder="Design search karein (e.g. RASHMIKA, 6350)..." value="${esc(bcState.search)}"
-                 oninput="bcState.search=this.value; renderBarcodeModule();" style="flex:1; min-width:200px;" />
+          <input id="bcSearchInput" placeholder="Design search karein (e.g. RASHMIKA, 6350)..."
+                 value="${esc(bcState.search)}" data-custom-enter="1"
+                 oninput="filterDesignsLive(this.value)" style="flex:1; min-width:200px;" />
           <button class="btn btn-dark btn-sm" onclick="addNewDesignPrompt()">+ Naya Design</button>
         </div>
 
         <div style="overflow-x:auto;">
           <table>
             <thead><tr><th>Design Name</th><th>Quality / Spec Line</th><th>Ready Stock</th><th>Action</th></tr></thead>
-            <tbody>
-              ${filtered.slice(0, 100).map((d) => {
-                const stList = ready.filter((r) => r.designName === d.designName && r.qty > 0);
-                const stockTxt = stList.length ? stList.map((r) => `${r.firmCode}: ${r.qty}`).join(', ') : '0';
-                return `
-                  <tr>
-                    <td><b>${esc(d.designName)}</b></td>
-                    <td><small>${esc(d.specLine || '-')}</small></td>
-                    <td><b>${esc(stockTxt)}</b></td>
-                    <td style="white-space:nowrap;">
-                      <button class="btn btn-dark btn-sm" onclick="quickReprintPrompt('${esc(d.designName)}','${esc(d.specLine || '')}')">🖨️ Sticker</button>
-                      <button class="btn btn-danger btn-sm" onclick="deleteDesign('${esc(d.designName)}')">X</button>
-                    </td>
-                  </tr>
-                `;
-              }).join('') || '<tr><td colspan="4">Koi Design nahi mila</td></tr>'}
-            </tbody>
+            <tbody id="bcDesignTableBody">${buildDesignRowsHTML(bcState.search)}</tbody>
           </table>
         </div>
       </div>
     `;
+    setTimeout(() => document.getElementById('bcSearchInput')?.focus(), 40);
     return;
   }
 
@@ -189,7 +204,6 @@ async function renderBarcodeModule() {
           </select>
         </div>
         <div style="display:flex; align-items:flex-end;">
-          <!-- Live Sticker Preview (Photo Jaisa) -->
           <div id="bcLivePreview" style="border:1px solid #9ca3af; border-radius:8px; padding:8px 12px; width:100%; text-align:center; background:#fff;">
             <div style="font-size:10px; font-weight:700;" id="prevSpec">3.60 CM EMB JHALAR</div>
             <div style="font-size:16px; font-weight:800; letter-spacing:0.5px;" id="prevDesign">RASHMIKA</div>
@@ -267,10 +281,8 @@ async function saveAndPrintBarcoding() {
     const barcodeVal = `${designName} ${firmCode}`;
     const skuKey = `${designName}__${firmCode}`;
 
-    // 1. Source Stock Minus (-)
     await dbPut('bunkarStock', { bunkarName: sourceName, qty: avail - qty, updatedAt: new Date().toISOString() });
 
-    // 2. Design Master me Save / Update
     const exDes = await dbGet('designs', designName);
     await dbPut('designs', {
       designName,
@@ -278,7 +290,6 @@ async function saveAndPrintBarcoding() {
       createdAt: exDes ? exDes.createdAt : Date.now()
     });
 
-    // 3. Ready Barcoded Stock Plus (+)
     const curReady = await dbGet('readyStock', skuKey);
     await dbPut('readyStock', {
       skuKey, designName, firmCode, specLine, barcodeVal,
@@ -286,7 +297,6 @@ async function saveAndPrintBarcoding() {
       updatedAt: new Date().toISOString()
     });
 
-    // 4. Barcoding Log Save
     await dbPut('barcodingLogs', {
       date, sourceName, designName, firmCode, specLine, barcodeVal, qty, createdAt: Date.now()
     });
@@ -307,7 +317,6 @@ async function printBarcodeStickers(specLine, designName, firmCode, count, mode)
   const codeVal = `${designName} ${firmCode}`;
   const isThermal = mode !== 'A4_GRID';
 
-  // Dynamic Page CSS inject
   let pageSt = document.getElementById('simplitexDynamicPageCSS');
   if (!pageSt) {
     pageSt = document.createElement('style');
