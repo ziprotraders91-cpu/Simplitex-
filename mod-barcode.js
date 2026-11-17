@@ -1,7 +1,7 @@
-// === SimpliTex Module 4: Barcoding, Design Master & Sticker Print ===
+// === SimpliTex Module 4: Barcoding, Design Master & Sticker Print (15-Row Pager + Aligned) ===
 
 const _BC_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
-let bcState = { view: 'FORM', search: '', designsCache: [], readyCache: [] };
+let bcState = { view: 'FORM' };
 
 function ensureJsBarcodeLoaded() {
   if (typeof window.JsBarcode === 'function') return Promise.resolve(true);
@@ -37,74 +37,60 @@ window.handleModuleEscape = function () {
   return false;
 };
 
-function buildDesignRowsHTML(queryStr) {
-  const q = (queryStr || '').trim().toUpperCase();
-  const filtered = q
-    ? bcState.designsCache.filter((d) =>
-        d.designName.includes(q) || (d.specLine || '').toUpperCase().includes(q)
-      )
-    : bcState.designsCache;
-
-  return filtered.slice(0, 150).map((d) => {
-    const stList = bcState.readyCache.filter((r) => r.designName === d.designName && r.qty > 0);
-    const stockTxt = stList.length ? stList.map((r) => `${r.firmCode}: ${r.qty}`).join(', ') : '0';
-    return `
-      <tr>
-        <td><b>${esc(d.designName)}</b></td>
-        <td><small>${esc(d.specLine || '-')}</small></td>
-        <td><b>${esc(stockTxt)}</b></td>
-        <td style="white-space:nowrap;">
-          <button class="btn btn-dark btn-sm" onclick="quickReprintPrompt('${esc(d.designName)}','${esc(d.specLine || '')}')">🖨️ Sticker</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteDesign('${esc(d.designName)}')">X</button>
-        </td>
-      </tr>
-    `;
-  }).join('') || '<tr><td colspan="4">Koi Design nahi mila</td></tr>';
-}
-
-function filterDesignsLive(val) {
-  bcState.search = val;
-  const tbody = document.getElementById('bcDesignTableBody');
-  if (tbody) tbody.innerHTML = buildDesignRowsHTML(val);
-}
-
 async function renderBarcodeModule() {
   await openDB();
   if (typeof ensureOrderPrintSetup === 'function') ensureOrderPrintSetup();
   const box = document.getElementById('tab-barcode');
 
-  // === VIEW 1: DESIGN MASTER & READY STOCK ===
+  // === VIEW 1: DESIGN MASTER (Universal Search + 15-Row Pager) ===
   if (bcState.view === 'DESIGNS') {
-    bcState.designsCache = await dbGetAll('designs');
-    bcState.readyCache = await dbGetAll('readyStock');
+    const designs = await dbGetAll('designs');
+    const ready = await dbGetAll('readyStock');
+    const enriched = designs.map((d) => {
+      const stList = ready.filter((r) => r.designName === d.designName && r.qty > 0);
+      return {
+        ...d,
+        stockTxt: stList.length ? stList.map((r) => `${r.firmCode}: ${r.qty}`).join(', ') : '0'
+      };
+    });
 
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>🎨 Design Master (${bcState.designsCache.length} Designs)</h2>
-          <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+          <h2>🎨 Design Master (${designs.length} Designs)</h2>
+          <div>
+            <button class="btn btn-dark btn-sm" onclick="addNewDesignPrompt()">+ Naya Design</button>
+            <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+          </div>
         </div>
-
-        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
-          <input id="bcSearchInput" placeholder="Design search karein (e.g. RASHMIKA, 6350)..."
-                 value="${esc(bcState.search)}" data-custom-enter="1"
-                 oninput="filterDesignsLive(this.value)" style="flex:1; min-width:200px;" />
-          <button class="btn btn-dark btn-sm" onclick="addNewDesignPrompt()">+ Naya Design</button>
-        </div>
-
-        <div style="overflow-x:auto;">
-          <table>
-            <thead><tr><th>Design Name</th><th>Quality / Spec Line</th><th>Ready Stock</th><th>Action</th></tr></thead>
-            <tbody id="bcDesignTableBody">${buildDesignRowsHTML(bcState.search)}</tbody>
-          </table>
-        </div>
+        <div id="bcDesignPager"></div>
       </div>
     `;
-    setTimeout(() => document.getElementById('bcSearchInput')?.focus(), 40);
+
+    mountPagedList({
+      id: 'bcDesignPager',
+      items: enriched,
+      perPage: 15,
+      placeholder: '🔍 Design Name, Quality ya Firm Code search karein...',
+      headHtml: '<tr><th>Design Name</th><th>Quality / Spec Line</th><th>Ready Stock</th><th>Action</th></tr>',
+      getSearchText: (d) => `${d.designName} ${d.specLine || ''} ${d.stockTxt}`,
+      renderRow: (d) => `
+        <tr>
+          <td><b>${esc(d.designName)}</b></td>
+          <td><small>${esc(d.specLine || '-')}</small></td>
+          <td><b>${esc(d.stockTxt)}</b></td>
+          <td style="white-space:nowrap;">
+            <button class="btn btn-dark btn-sm" onclick="quickReprintPrompt('${esc(d.designName)}','${esc(d.specLine || '')}')">🖨️ Sticker</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteDesign('${esc(d.designName)}')">X</button>
+          </td>
+        </tr>
+      `,
+      emptyHtml: '<tr><td colspan="4">Koi Design nahi mila</td></tr>'
+    });
     return;
   }
 
-  // === VIEW 2: BARCODING RECORD / HISTORY ===
+  // === VIEW 2: BARCODING RECORD (Universal Search + 15-Row Pager) ===
   if (bcState.view === 'HISTORY') {
     const logs = (await dbGetAll('barcodingLogs')).sort((a, b) => b.createdAt - a.createdAt);
     box.innerHTML = `
@@ -113,31 +99,35 @@ async function renderBarcodeModule() {
           <h2>📜 Barcoding Record (${logs.length})</h2>
           <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
         </div>
-        <div style="overflow-x:auto;">
-          <table>
-            <thead><tr><th>Date</th><th>Kahan se (Source)</th><th>Design & Firm</th><th>Pcs</th><th>Action</th></tr></thead>
-            <tbody>
-              ${logs.map((l) => `
-                <tr>
-                  <td style="white-space:nowrap;">${esc(l.date)}</td>
-                  <td>${esc(l.sourceName === _BC_POOL ? 'Job Work Pool' : l.sourceName)}</td>
-                  <td><b>${esc(l.designName)} ${esc(l.firmCode)}</b><br/><small>${esc(l.specLine || '')}</small></td>
-                  <td><b>${l.qty}</b></td>
-                  <td style="white-space:nowrap;">
-                    <button class="btn btn-dark btn-sm" onclick="printBarcodeStickers('${esc(l.specLine || '')}','${esc(l.designName)}','${esc(l.firmCode)}',${l.qty},'THERMAL')">🖨️</button>
-                    <button class="btn btn-danger btn-sm" onclick="reverseBarcodingLog(${l.id})">↩️ Delete</button>
-                  </td>
-                </tr>
-              `).join('') || '<tr><td colspan="5">Abhi koi Barcoding entry nahi hui</td></tr>'}
-            </tbody>
-          </table>
-        </div>
+        <div id="bcHistoryPager"></div>
       </div>
     `;
+
+    mountPagedList({
+      id: 'bcHistoryPager',
+      items: logs,
+      perPage: 15,
+      placeholder: '🔍 Date, Bunkar, Design ya Firm search karein...',
+      headHtml: '<tr><th>Date</th><th>Source</th><th>Design & Firm</th><th>Pcs</th><th>Action</th></tr>',
+      getSearchText: (l) => `${l.date} ${l.sourceName} ${l.designName} ${l.firmCode} ${l.specLine || ''}`,
+      renderRow: (l) => `
+        <tr>
+          <td style="white-space:nowrap;">${esc(l.date)}</td>
+          <td>${esc(l.sourceName === _BC_POOL ? 'Job Work Pool' : l.sourceName)}</td>
+          <td><b>${esc(l.designName)} ${esc(l.firmCode)}</b><br/><small>${esc(l.specLine || '')}</small></td>
+          <td><b>${l.qty}</b></td>
+          <td style="white-space:nowrap;">
+            <button class="btn btn-dark btn-sm" onclick="printBarcodeStickers('${esc(l.specLine || '')}','${esc(l.designName)}','${esc(l.firmCode)}',${l.qty},'THERMAL')">🖨️</button>
+            <button class="btn btn-danger btn-sm" onclick="reverseBarcodingLog(${l.id})">↩️ Delete</button>
+          </td>
+        </tr>
+      `,
+      emptyHtml: '<tr><td colspan="5">Abhi koi Barcoding entry nahi hui</td></tr>'
+    });
     return;
   }
 
-  // === VIEW 3: MAIN BARCODING FORM ===
+  // === VIEW 3: MAIN BARCODING FORM (Aligned Boxes) ===
   const stocks = (await dbGetAll('bunkarStock')).filter((s) => s.qty > 0);
   const firms = await dbGetAll('firms');
   const designs = await dbGetAll('designs');
@@ -147,8 +137,8 @@ async function renderBarcodeModule() {
       <div class="card-head">
         <h2>4. Barcoding (Stock Convert & Sticker Print)</h2>
         <div>
-          <button class="btn btn-light btn-sm" onclick="bcState.view='DESIGNS'; renderBarcodeModule();">🎨 Designs (${designs.length})</button>
-          <button class="btn btn-dark btn-sm" onclick="bcState.view='HISTORY'; renderBarcodeModule();">📜 Record</button>
+          <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['bcDesignPager']; bcState.view='DESIGNS'; renderBarcodeModule();">🎨 Designs (${designs.length})</button>
+          <button class="btn btn-dark btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['bcHistoryPager']; bcState.view='HISTORY'; renderBarcodeModule();">📜 Record</button>
         </div>
       </div>
 
@@ -193,9 +183,7 @@ async function renderBarcodeModule() {
           <label>Quantity (Pcs & Stickers) *</label>
           <input type="number" id="bcQty" min="1" placeholder="e.g. 20" />
         </div>
-      </div>
 
-      <div class="grid-2" style="margin-top:10px;">
         <div>
           <label>Sticker Print Size</label>
           <select id="bcPrintMode">
@@ -203,11 +191,13 @@ async function renderBarcodeModule() {
             <option value="A4_GRID">A4 Sticker Sheet (Grid)</option>
           </select>
         </div>
-        <div style="display:flex; align-items:flex-end;">
-          <div id="bcLivePreview" style="border:1px solid #9ca3af; border-radius:8px; padding:8px 12px; width:100%; text-align:center; background:#fff;">
+
+        <div>
+          <label>Live Sticker Preview</label>
+          <div id="bcLivePreview" style="border:1px solid #9ca3af; border-radius:8px; padding:6px 10px; text-align:center; background:#fff;">
             <div style="font-size:10px; font-weight:700;" id="prevSpec">3.60 CM EMB JHALAR</div>
-            <div style="font-size:16px; font-weight:800; letter-spacing:0.5px;" id="prevDesign">RASHMIKA</div>
-            <svg id="prevBarcodeSvg" style="max-width:100%; height:34px;"></svg>
+            <div style="font-size:15px; font-weight:800; letter-spacing:0.5px;" id="prevDesign">RASHMIKA</div>
+            <svg id="prevBarcodeSvg" style="max-width:100%; height:30px;"></svg>
             <div style="font-size:11px; font-weight:700;" id="prevBottom">RASHMIKA KT</div>
           </div>
         </div>
@@ -253,7 +243,7 @@ async function updateStickerPreview() {
   if (typeof window.JsBarcode === 'function') {
     try {
       window.JsBarcode('#prevBarcodeSvg', codeVal, {
-        format: 'CODE128', width: 1.5, height: 32, displayValue: false, margin: 0
+        format: 'CODE128', width: 1.5, height: 28, displayValue: false, margin: 0
       });
     } catch (_) {}
   }
