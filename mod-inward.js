@@ -1,7 +1,8 @@
-// === SimpliTex Module 1 (Job Work Outward - Batch) & Module 2 (Stock Inward - Simple) ===
+// === SimpliTex Module 1 (Job Work Batch + Passbook) & Module 2 (Stock Inward + Record) ===
 
+const _JW_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
 let jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [] };
-let inState = { step: 'MENU', jwType: '', worker: null };
+let inState = { step: 'MENU', jwType: '', worker: null, filterDate: '' };
 
 function esc(str) {
   return String(str || '').replace(/[&<>"']/g, (m) => ({
@@ -14,36 +15,42 @@ function todayISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// Tab khulte hi clean Step 1 dikhana
+// Tab Switch Hook
 window.onTabChanged = function (tabId) {
   if (tabId === 'tab-jobwork') {
     jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [] };
     renderJWOutward();
   } else if (tabId === 'tab-inward') {
-    inState = { step: 'MENU', jwType: '', worker: null };
+    inState = { step: 'MENU', jwType: '', worker: null, filterDate: '' };
     renderStockInward();
   }
 };
 
-// Tally-style Esc Key (1 Step Peeche)
+// Tally Esc Key (1 Step Peeche)
 window.handleModuleEscape = function () {
   const sec = document.querySelector('.tab-sec:not(.hidden)');
   if (!sec) return false;
 
   if (sec.id === 'tab-jobwork') {
-    if (jwState.step === 'BATCH') { jwState.step = 'WORKER'; jwState.worker = null; renderJWOutward(); return true; }
-    if (jwState.step === 'WORKER') { jwState.step = 'TYPE'; jwState.jwType = ''; renderJWOutward(); return true; }
+    if (jwState.step === 'BATCH' || jwState.step === 'PASSBOOK') {
+      jwState.step = 'WORKER'; jwState.worker = null; renderJWOutward(); return true;
+    }
+    if (jwState.step === 'WORKER') {
+      jwState.step = 'TYPE'; jwState.jwType = ''; renderJWOutward(); return true;
+    }
   }
   if (sec.id === 'tab-inward') {
     if (inState.step === 'JW_RETURN') { inState.step = 'JW_WORKER'; inState.worker = null; renderStockInward(); return true; }
     if (inState.step === 'JW_WORKER') { inState.step = 'JW_TYPE'; inState.jwType = ''; renderStockInward(); return true; }
-    if (inState.step === 'DIRECT' || inState.step === 'JW_TYPE') { inState.step = 'MENU'; renderStockInward(); return true; }
+    if (inState.step === 'DIRECT' || inState.step === 'JW_TYPE' || inState.step === 'HISTORY') {
+      inState.step = 'MENU'; renderStockInward(); return true;
+    }
   }
   return false;
 };
 
 // ==========================================
-// MODULE 1: JOB WORK OUTWARD (3-Step Batch)
+// MODULE 1: JOB WORK OUTWARD + WORKER PASSBOOK
 // ==========================================
 async function renderJWOutward() {
   await openDB();
@@ -60,8 +67,7 @@ async function renderJWOutward() {
         </div>
         <div class="list-menu kbd-list">
           ${types.map((t, i) => `
-            <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}"
-                 onclick="pickOutJWType('${esc(t.name)}')">
+            <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}" onclick="pickOutJWType('${esc(t.name)}')">
               <span>${i + 1}. ${esc(t.name)}</span>
               <span class="badge">Enter →</span>
             </div>
@@ -72,7 +78,7 @@ async function renderJWOutward() {
     return;
   }
 
-  // STEP 2: US KAAM KE WORKERS KI LIST
+  // STEP 2: WORKERS LIST (Batch Entry + Khata/Passbook Button)
   if (jwState.step === 'WORKER') {
     const allWorkers = await dbGetAll('jobWorkers');
     const workers = allWorkers.filter((w) => !w.jobWorkType || w.jobWorkType.toUpperCase() === jwState.jwType.toUpperCase());
@@ -87,6 +93,7 @@ async function renderJWOutward() {
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
+
         <div id="addWorkerInlineOut" class="hidden" style="background:#f9fafb; border:1px solid #d1d5db; padding:12px; border-radius:8px; margin-bottom:12px;">
           <div class="grid-2">
             <div><label>Worker Naam *</label><input id="newWNameOut" placeholder="e.g. Raju Calender" /></div>
@@ -95,17 +102,76 @@ async function renderJWOutward() {
           <div style="margin-top:8px;"><label>Address</label><input id="newWAddrOut" placeholder="Mau" /></div>
           <button class="btn btn-dark btn-sm" style="margin-top:8px;" onclick="saveNewWorker('out')">Save Worker</button>
         </div>
+
         <div class="list-menu kbd-list">
           ${workers.length ? workers.map((w, i) => {
             const p = pendList.find((x) => x.id === `${w.name}__${jwState.jwType.toUpperCase()}`);
             const pQty = p ? p.qty : 0;
             return `
               <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}" onclick="pickOutWorker(${w.id})">
-                <span>${i + 1}. ${esc(w.name)} <small style="color:#6b7280;">${esc(w.phone || '')}</small></span>
-                <span class="badge">Pending: ${pQty} Pcs</span>
+                <div>
+                  <div>${i + 1}. ${esc(w.name)}</div>
+                  <small style="color:#6b7280; font-weight:400;">${esc(w.phone || '')} ${esc(w.address || '')}</small>
+                </div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span class="badge" style="color:${pQty > 0 ? '#b91c1c' : '#15803d'};">Pending: ${pQty}</span>
+                  <button type="button" class="btn btn-light btn-sm"
+                          onclick="event.stopPropagation(); openWorkerPassbook(${w.id})">📜 Khata</button>
+                </div>
               </div>
             `;
           }).join('') : '<p style="color:#6b7280; font-size:13px;">Abhi koi worker nahi hai. Upar "+ Naya Worker" dabaa kar jodein.</p>'}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  // STEP 2B: WORKER PASSBOOK / FULL HISTORY
+  if (jwState.step === 'PASSBOOK') {
+    const jwUpper = jwState.jwType.toUpperCase();
+    const wName = jwState.worker.name.toUpperCase();
+    const ledger = (await dbGetAll('jobWorkLedger'))
+      .filter((l) => l.workerName === wName && l.jobWorkType === jwUpper)
+      .sort((a, b) => b.createdAt - a.createdAt);
+    const pend = await dbGet('jobWorkPending', `${wName}__${jwUpper}`);
+
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>📜 ${esc(wName)} (${esc(jwState.jwType)}) — Poora Khata</h2>
+          <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+        </div>
+
+        <div style="background:#fef2f2; border:1px solid #fecaca; padding:10px 14px; border-radius:8px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
+          <span>Abhi Total Pending:</span>
+          <b style="font-size:18px; color:#b91c1c;">${pend ? pend.qty : 0} Pcs</b>
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr><th>Date</th><th>Kaam</th><th>Batch / Detail</th><th>Pcs</th><th>Note</th><th>Galti Sudhar</th></tr>
+            </thead>
+            <tbody>
+              ${ledger.map((l) => {
+                const isOut = l.direction === 'OUT';
+                const detail = isOut && Array.isArray(l.batchItems)
+                  ? l.batchItems.map((b) => `${b.bunkarName === _JW_POOL ? 'POOL' : b.bunkarName} (${b.qty})`).join(', ')
+                  : 'Total Wapsi Entry';
+                return `
+                  <tr>
+                    <td style="white-space:nowrap;">${esc(l.date)}</td>
+                    <td><b style="color:${isOut ? '#1d4ed8' : '#15803d'};">${isOut ? '📤 Bheja (OUT)' : '📥 Wapas (IN)'}</b></td>
+                    <td><small>${esc(detail)}</small></td>
+                    <td><b>${isOut ? '+' : '-'}${l.qty}</b></td>
+                    <td><small>${esc(l.note || '-')}</small></td>
+                    <td><button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${l.id}, 'PASSBOOK')">↩️ Delete</button></td>
+                  </tr>
+                `;
+              }).join('') || '<tr><td colspan="6">Is worker ka abhi koi record nahi hai</td></tr>'}
+            </tbody>
+          </table>
         </div>
       </div>
     `;
@@ -120,7 +186,7 @@ async function renderJWOutward() {
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>${esc(jwState.jwType)} → ${esc(jwState.worker.name)} (Batch Entry)</h2>
+          <h2>${esc(jwState.jwType)} → ${esc(jwState.worker.name)} (Batch)</h2>
           <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
         </div>
 
@@ -129,7 +195,6 @@ async function renderJWOutward() {
           <div><label>Note / Kaam Detail (Optional)</label><input id="batchNote" placeholder="e.g. Heavy finish" /></div>
         </div>
 
-        <!-- Keyboard Fast Entry Row -->
         <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:10px; border-radius:8px; margin-bottom:10px;">
           <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:6px;">
             Batch Me Saree Jodein (Bunkar chunein → Qty likh kar Enter dabayein):
@@ -137,9 +202,9 @@ async function renderJWOutward() {
           <div class="grid-2">
             <div>
               <label>Saree (Bunkar Stock)</label>
-              <input id="batchBunkarInput" list="batchBunkarList" placeholder="Bunkar naam likhein (e.g. FARHAN)" />
+              <input id="batchBunkarInput" list="batchBunkarList" placeholder="Bunkar naam (e.g. FARHAN)" />
               <datalist id="batchBunkarList">
-                ${stocks.map((s) => `<option value="${esc(s.bunkarName)}">${esc(s.bunkarName === JW_POOL_KEY ? 'JOB WORK POOL' : s.bunkarName)} (${s.qty} Pcs)</option>`).join('')}
+                ${stocks.map((s) => `<option value="${esc(s.bunkarName)}">${esc(s.bunkarName === _JW_POOL ? 'JOB WORK POOL' : s.bunkarName)} (${s.qty} Pcs)</option>`).join('')}
               </datalist>
             </div>
             <div>
@@ -157,11 +222,11 @@ async function renderJWOutward() {
             ${jwState.batchRows.map((r, i) => `
               <tr>
                 <td>${i + 1}</td>
-                <td><b>${esc(r.bunkarName === JW_POOL_KEY ? 'JOB WORK POOL' : r.bunkarName)}</b></td>
+                <td><b>${esc(r.bunkarName === _JW_POOL ? 'JOB WORK POOL' : r.bunkarName)}</b></td>
                 <td><b>${r.qty}</b></td>
                 <td><button class="btn btn-danger btn-sm" onclick="removeBatchRow(${i})">X</button></td>
               </tr>
-            `).join('') || '<tr><td colspan="4" style="color:#6b7280;">Abhi batch khali hai... upar se saree add karein</td></tr>'}
+            `).join('') || '<tr><td colspan="4" style="color:#6b7280;">Abhi batch khali hai... upar se add karein</td></tr>'}
           </tbody>
         </table>
 
@@ -184,6 +249,11 @@ async function pickOutWorker(id) {
   jwState.step = 'BATCH';
   renderJWOutward();
 }
+async function openWorkerPassbook(id) {
+  jwState.worker = await dbGet('jobWorkers', id);
+  jwState.step = 'PASSBOOK';
+  renderJWOutward();
+}
 
 function showAddWorkerModal(mode) {
   const el = document.getElementById(mode === 'out' ? 'addWorkerInlineOut' : 'addWorkerInlineIn');
@@ -193,14 +263,16 @@ function showAddWorkerModal(mode) {
 }
 
 async function saveNewWorker(mode) {
-  const pfx = mode === 'out' ? 'Out' : 'In';
-  const name = document.getElementById('newWName' + pfx).value.trim().toUpperCase();
-  const phone = document.getElementById('newWPhone' + pfx).value.trim();
-  const address = document.getElementById('newWAddr' + pfx).value.trim();
-  const jwType = mode === 'out' ? jwState.jwType : inState.jwType;
-  if (!name) return alert('Worker ka naam zaroori hai!');
-  await dbPut('jobWorkers', { name, phone, address, jobWorkType: jwType.toUpperCase() });
-  mode === 'out' ? renderJWOutward() : renderStockInward();
+  try {
+    const pfx = mode === 'out' ? 'Out' : 'In';
+    const name = document.getElementById('newWName' + pfx).value.trim().toUpperCase();
+    const phone = document.getElementById('newWPhone' + pfx).value.trim();
+    const address = document.getElementById('newWAddr' + pfx).value.trim();
+    const jwType = mode === 'out' ? jwState.jwType : inState.jwType;
+    if (!name) return alert('Worker ka naam zaroori hai!');
+    await dbPut('jobWorkers', { name, phone, address, jobWorkType: jwType.toUpperCase() });
+    mode === 'out' ? renderJWOutward() : renderStockInward();
+  } catch (err) { alert('Save Error: ' + err.message); }
 }
 
 async function addJobWorkTypePrompt(mode) {
@@ -233,59 +305,59 @@ async function addBatchRow() {
   await renderJWOutward();
 }
 
-function removeBatchRow(idx) {
-  jwState.batchRows.splice(idx, 1);
-  renderJWOutward();
-}
+function removeBatchRow(idx) { jwState.batchRows.splice(idx, 1); renderJWOutward(); }
 
 async function saveBatchOutward() {
-  if (!jwState.batchRows.length) return alert('Batch khali hai! Kam se kam 1 saree add karein.');
-  const date = document.getElementById('batchDate').value || todayISO();
-  const note = document.getElementById('batchNote').value.trim();
-  const jwTypeUpper = jwState.jwType.toUpperCase();
-  const workerName = jwState.worker.name.toUpperCase();
+  try {
+    if (!jwState.batchRows.length) return alert('Batch khali hai! Kam se kam 1 saree add karein.');
+    const date = document.getElementById('batchDate').value || todayISO();
+    const note = document.getElementById('batchNote').value.trim();
+    const jwTypeUpper = jwState.jwType.toUpperCase();
+    const workerName = jwState.worker.name.toUpperCase();
 
-  let totalQty = 0;
-  for (const row of jwState.batchRows) {
-    const st = await dbGet('bunkarStock', row.bunkarName);
-    const avail = st ? st.qty : 0;
-    await dbPut('bunkarStock', { bunkarName: row.bunkarName, qty: Math.max(0, avail - row.qty), updatedAt: new Date().toISOString() });
-    totalQty += row.qty;
-  }
+    let totalQty = 0;
+    for (const row of jwState.batchRows) {
+      const st = await dbGet('bunkarStock', row.bunkarName);
+      const avail = st ? st.qty : 0;
+      await dbPut('bunkarStock', { bunkarName: row.bunkarName, qty: Math.max(0, avail - row.qty), updatedAt: new Date().toISOString() });
+      totalQty += row.qty;
+    }
 
-  // Worker ke khate me Total Pending add (+)
-  const pendId = `${workerName}__${jwTypeUpper}`;
-  const curPend = await dbGet('jobWorkPending', pendId);
-  await dbPut('jobWorkPending', {
-    id: pendId, workerName, jobWorkType: jwTypeUpper, qty: (curPend ? curPend.qty : 0) + totalQty
-  });
+    const pendId = `${workerName}__${jwTypeUpper}`;
+    const curPend = await dbGet('jobWorkPending', pendId);
+    await dbPut('jobWorkPending', {
+      id: pendId, workerName, jobWorkType: jwTypeUpper, qty: (curPend ? curPend.qty : 0) + totalQty
+    });
 
-  // Ledger me Batch Save
-  await dbPut('jobWorkLedger', {
-    direction: 'OUT', jobWorkType: jwTypeUpper, workerName,
-    qty: totalQty, batchItems: jwState.batchRows, date, note, createdAt: Date.now()
-  });
+    await dbPut('jobWorkLedger', {
+      direction: 'OUT', jobWorkType: jwTypeUpper, workerName,
+      qty: totalQty, batchItems: jwState.batchRows, date, note, createdAt: Date.now()
+    });
 
-  alert(`📤 ${workerName} (${jwTypeUpper}) ko Total ${totalQty} Pcs Batch bhej diya gaya!`);
-  jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [] };
-  await refreshDashboard();
-  renderJWOutward();
+    alert(`📤 ${workerName} (${jwTypeUpper}) ko Total ${totalQty} Pcs Batch bhej diya gaya!`);
+    jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [] };
+    if (typeof refreshDashboard === 'function') await refreshDashboard();
+    renderJWOutward();
+  } catch (err) { alert('Save Error: ' + err.message); }
 }
 
 // ==========================================
-// MODULE 2: STOCK INWARD (Simple, No Batch)
+// MODULE 2: STOCK INWARD + FULL INWARD RECORD
 // ==========================================
 async function renderStockInward() {
   await openDB();
   const box = document.getElementById('tab-inward');
 
-  // STEP 1: 2 SEEDHE RASTE
+  // STEP 1: MENU + RECORD BUTTON
   if (inState.step === 'MENU') {
+    const ledger = (await dbGetAll('jobWorkLedger')).filter((l) => l.direction === 'IN');
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
           <h2>2. Stock Inward — Maal Kahan se Aaya?</h2>
-          <span class="shortcut-hint">Key 1 ya 2 dabayein</span>
+          <button class="btn btn-dark btn-sm" onclick="inState.step='HISTORY'; renderStockInward();">
+            📜 Poora Record (${ledger.length})
+          </button>
         </div>
         <div class="list-menu kbd-list">
           <div class="list-row kbd-active" data-key="1" onclick="inState.step='DIRECT'; renderStockInward();">
@@ -302,10 +374,58 @@ async function renderStockInward() {
     return;
   }
 
-  // OPTION 1: DIRECT BAITHAK
+  // INWARD RECORD / HISTORY VIEW
+  if (inState.step === 'HISTORY') {
+    const allIn = (await dbGetAll('jobWorkLedger'))
+      .filter((l) => l.direction === 'IN')
+      .sort((a, b) => b.createdAt - a.createdAt);
+    const filtered = inState.filterDate ? allIn.filter((l) => l.date === inState.filterDate) : allIn;
+
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>📜 Stock Inward Record (${filtered.length})</h2>
+          <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+        </div>
+
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+          <label style="margin:0;">Date Filter:</label>
+          <input type="date" style="width:auto;" value="${esc(inState.filterDate)}"
+                 onchange="inState.filterDate=this.value; renderStockInward();" />
+          ${inState.filterDate ? `<button class="btn btn-light btn-sm" onclick="inState.filterDate=''; renderStockInward();">All Dates</button>` : ''}
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr><th>Date</th><th>Source</th><th>Bunkar / Worker</th><th>Pcs</th><th>Note</th><th>Galti Sudhar</th></tr>
+            </thead>
+            <tbody>
+              ${filtered.map((l) => {
+                const isDirect = l.jobWorkType === 'DIRECT_BAITHAK';
+                return `
+                  <tr>
+                    <td style="white-space:nowrap;">${esc(l.date)}</td>
+                    <td><b>${isDirect ? '🏠 Direct Baithak' : '🧵 ' + esc(l.jobWorkType)}</b></td>
+                    <td><b>${esc(isDirect ? l.bunkarName : l.workerName)}</b></td>
+                    <td><b style="color:#15803d;">+${l.qty}</b></td>
+                    <td><small>${esc(l.note || '-')}</small></td>
+                    <td><button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${l.id}, 'INWARD_HIST')">↩️ Delete</button></td>
+                  </tr>
+                `;
+              }).join('') || '<tr><td colspan="6">Koi record nahi mila</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  // DIRECT BAITHAK FORM
   if (inState.step === 'DIRECT') {
     const stocks = await dbGetAll('bunkarStock');
-    const names = stocks.filter((s) => s.bunkarName !== JW_POOL_KEY);
+    const names = stocks.filter((s) => s.bunkarName !== _JW_POOL);
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
@@ -335,7 +455,7 @@ async function renderStockInward() {
     return;
   }
 
-  // OPTION 2A: JOB WORK TYPE CHUNEIN
+  // JOB WORK RETURN STEP 1: TYPE
   if (inState.step === 'JW_TYPE') {
     const types = await dbGetAll('jobWorkTypes');
     box.innerHTML = `
@@ -358,7 +478,7 @@ async function renderStockInward() {
     return;
   }
 
-  // OPTION 2B: WORKER CHUNEIN (Pending Dikhega)
+  // JOB WORK RETURN STEP 2: WORKER
   if (inState.step === 'JW_WORKER') {
     const allWorkers = await dbGetAll('jobWorkers');
     const workers = allWorkers.filter((w) => !w.jobWorkType || w.jobWorkType.toUpperCase() === inState.jwType.toUpperCase());
@@ -398,7 +518,7 @@ async function renderStockInward() {
     return;
   }
 
-  // OPTION 2C: SIRF TOTAL WAPAS QTY ENTRY (NO BATCH / NO BUNKAR)
+  // JOB WORK RETURN STEP 3: TOTAL PCS
   if (inState.step === 'JW_RETURN') {
     const jwUpper = inState.jwType.toUpperCase();
     const pend = await dbGet('jobWorkPending', `${inState.worker.name.toUpperCase()}__${jwUpper}`);
@@ -441,58 +561,94 @@ async function pickInWorker(id) {
 }
 
 async function saveDirectInward() {
-  const date = document.getElementById('dirDate').value || todayISO();
-  const bunkarName = document.getElementById('dirBunkar').value.trim().toUpperCase();
-  const qty = parseInt(document.getElementById('dirQty').value, 10);
-  const note = document.getElementById('dirNote').value.trim();
+  try {
+    const date = document.getElementById('dirDate').value || todayISO();
+    const bunkarName = document.getElementById('dirBunkar').value.trim().toUpperCase();
+    const qty = parseInt(document.getElementById('dirQty').value, 10);
+    const note = document.getElementById('dirNote').value.trim();
 
-  if (!bunkarName) return alert('Bunkar ka naam daalein!');
-  if (!qty || qty <= 0) return alert('Sahi Pcs daalein!');
+    if (!bunkarName) return alert('Bunkar ka naam daalein!');
+    if (!qty || qty <= 0) return alert('Sahi Pcs daalein!');
 
-  const cur = await dbGet('bunkarStock', bunkarName);
-  await dbPut('bunkarStock', { bunkarName, qty: (cur ? cur.qty : 0) + qty, updatedAt: new Date().toISOString() });
-  await dbPut('jobWorkLedger', {
-    direction: 'IN', jobWorkType: 'DIRECT_BAITHAK', workerName: 'DIRECT BAITHAK',
-    bunkarName, qty, date, note, createdAt: Date.now()
-  });
+    const cur = await dbGet('bunkarStock', bunkarName);
+    await dbPut('bunkarStock', { bunkarName, qty: (cur ? cur.qty : 0) + qty, updatedAt: new Date().toISOString() });
+    await dbPut('jobWorkLedger', {
+      direction: 'IN', jobWorkType: 'DIRECT_BAITHAK', workerName: 'DIRECT BAITHAK',
+      bunkarName, qty, date, note, createdAt: Date.now()
+    });
 
-  alert(`✅ ${bunkarName} ki ${qty} saree Dukan Stock me jud gayi!`);
-  document.getElementById('dirBunkar').value = '';
-  document.getElementById('dirQty').value = '';
-  document.getElementById('dirNote').value = '';
-  document.getElementById('dirBunkar').focus();
-  await refreshDashboard();
+    alert(`✅ ${bunkarName} ki ${qty} saree Dukan Stock me jud gayi!`);
+    document.getElementById('dirBunkar').value = '';
+    document.getElementById('dirQty').value = '';
+    document.getElementById('dirNote').value = '';
+    document.getElementById('dirBunkar').focus();
+    if (typeof refreshDashboard === 'function') await refreshDashboard();
+  } catch (err) { alert('Save Error: ' + err.message); }
 }
 
 async function saveJWReturnInward() {
-  const date = document.getElementById('jwRetDate').value || todayISO();
-  const qty = parseInt(document.getElementById('jwRetQty').value, 10);
-  const note = document.getElementById('jwRetNote').value.trim();
-  const jwUpper = inState.jwType.toUpperCase();
-  const workerName = inState.worker.name.toUpperCase();
+  try {
+    const date = document.getElementById('jwRetDate').value || todayISO();
+    const qty = parseInt(document.getElementById('jwRetQty').value, 10);
+    const note = document.getElementById('jwRetNote').value.trim();
+    const jwUpper = inState.jwType.toUpperCase();
+    const workerName = inState.worker.name.toUpperCase();
 
-  if (!qty || qty <= 0) return alert('Sahi Quantity daalein!');
+    if (!qty || qty <= 0) return alert('Sahi Quantity daalein!');
 
-  const pendId = `${workerName}__${jwUpper}`;
-  const pend = await dbGet('jobWorkPending', pendId);
-  const pendQty = pend ? pend.qty : 0;
+    const pendId = `${workerName}__${jwUpper}`;
+    const pend = await dbGet('jobWorkPending', pendId);
+    const pendQty = pend ? pend.qty : 0;
 
-  if (qty > pendQty) {
-    if (!confirm(`${workerName} par sirf ${pendQty} Pcs pending hai. Phir bhi ${qty} Pcs wapsi enter karna hai?`)) return;
-  }
+    if (qty > pendQty) {
+      if (!confirm(`${workerName} par sirf ${pendQty} Pcs pending hai. Phir bhi ${qty} Pcs wapsi enter karna hai?`)) return;
+    }
 
-  await dbPut('jobWorkPending', { id: pendId, workerName, jobWorkType: jwUpper, qty: Math.max(0, pendQty - qty) });
+    await dbPut('jobWorkPending', { id: pendId, workerName, jobWorkType: jwUpper, qty: Math.max(0, pendQty - qty) });
 
-  // Returned Stock Pool me Add (+)
-  const pool = await dbGet('bunkarStock', JW_POOL_KEY);
-  await dbPut('bunkarStock', { bunkarName: JW_POOL_KEY, qty: (pool ? pool.qty : 0) + qty, updatedAt: new Date().toISOString() });
+    const pool = await dbGet('bunkarStock', _JW_POOL);
+    await dbPut('bunkarStock', { bunkarName: _JW_POOL, qty: (pool ? pool.qty : 0) + qty, updatedAt: new Date().toISOString() });
 
-  await dbPut('jobWorkLedger', {
-    direction: 'IN', jobWorkType: jwUpper, workerName, qty, date, note, createdAt: Date.now()
-  });
+    await dbPut('jobWorkLedger', {
+      direction: 'IN', jobWorkType: jwUpper, workerName, qty, date, note, createdAt: Date.now()
+    });
 
-  alert(`✅ ${workerName} se ${qty} Pcs wapas aa gayi! (Baki Pending: ${Math.max(0, pendQty - qty)} Pcs)`);
-  inState = { step: 'MENU', jwType: '', worker: null };
-  await refreshDashboard();
-  renderStockInward();
+    alert(`✅ ${workerName} se ${qty} Pcs wapas aa gayi! (Baki Pending: ${Math.max(0, pendQty - qty)} Pcs)`);
+    inState = { step: 'MENU', jwType: '', worker: null, filterDate: '' };
+    if (typeof refreshDashboard === 'function') await refreshDashboard();
+    renderStockInward();
+  } catch (err) { alert('Save Error: ' + err.message); }
+}
+
+// === GALTI SUDHAR: ENTRY REVERSE & DELETE ===
+async function reverseLedgerEntry(id, returnTo) {
+  try {
+    const entry = await dbGet('jobWorkLedger', id);
+    if (!entry) return;
+    if (!confirm(`Kya ye ${entry.date} ki (${entry.qty} Pcs) entry Delete karke Stock/Pending wapas theek karna hai?`)) return;
+
+    if (entry.direction === 'OUT') {
+      // Batch wapas Bunkar stock me daalo & Pending kam karo
+      for (const row of (entry.batchItems || [])) {
+        const st = await dbGet('bunkarStock', row.bunkarName);
+        await dbPut('bunkarStock', { bunkarName: row.bunkarName, qty: (st ? st.qty : 0) + row.qty, updatedAt: new Date().toISOString() });
+      }
+      const pendId = `${entry.workerName}__${entry.jobWorkType}`;
+      const p = await dbGet('jobWorkPending', pendId);
+      if (p) await dbPut('jobWorkPending', { ...p, qty: Math.max(0, p.qty - entry.qty) });
+    } else if (entry.direction === 'IN' && entry.jobWorkType === 'DIRECT_BAITHAK') {
+      const st = await dbGet('bunkarStock', entry.bunkarName);
+      if (st) await dbPut('bunkarStock', { ...st, qty: Math.max(0, st.qty - entry.qty), updatedAt: new Date().toISOString() });
+    } else if (entry.direction === 'IN') {
+      const pool = await dbGet('bunkarStock', _JW_POOL);
+      if (pool) await dbPut('bunkarStock', { ...pool, qty: Math.max(0, pool.qty - entry.qty), updatedAt: new Date().toISOString() });
+      const pendId = `${entry.workerName}__${entry.jobWorkType}`;
+      const p = await dbGet('jobWorkPending', pendId);
+      await dbPut('jobWorkPending', { id: pendId, workerName: entry.workerName, jobWorkType: entry.jobWorkType, qty: (p ? p.qty : 0) + entry.qty });
+    }
+
+    await dbDelete('jobWorkLedger', id);
+    if (typeof refreshDashboard === 'function') await refreshDashboard();
+    returnTo === 'PASSBOOK' ? renderJWOutward() : renderStockInward();
+  } catch (err) { alert('Reverse Error: ' + err.message); }
 }
