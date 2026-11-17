@@ -1,11 +1,18 @@
-const CACHE_NAME = 'simplitex-live-v1';
+const CACHE_NAME = 'simplitex-live-v2';
 const CORE_FILES = [
   './',
   './index.html',
   './style.css',
   './db.js',
   './app.js',
-  './manifest.json'
+  './mod-inward.js',
+  './mod-order.js',
+  './mod-barcode.js',
+  './mod-challan.js',
+  './mod-daybook.js',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 self.addEventListener('install', (e) => {
@@ -27,6 +34,8 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  if (!e.request.url.startsWith('http')) return;
+
   e.respondWith(
     fetch(e.request)
       .then((res) => {
