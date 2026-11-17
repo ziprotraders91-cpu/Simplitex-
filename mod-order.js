@@ -1,4 +1,4 @@
-// === SimpliTex Module 3: Order Form (Agent Box + Manual Fold + Live Fulfillment Status) ===
+// === SimpliTex Module 3 v2: Order Form (Fast Indexed + O(1) Fulfillment Status) ===
 
 let orderState = { view: 'FORM', items: [], filter: 'ALL' };
 
@@ -120,15 +120,24 @@ async function renderOrderModule() {
   ensureOrderPrintSetup();
   const box = document.getElementById('tab-order');
 
-  // === SAVED ORDERS LIST (Universal Search + 15-Row Pagination + Pending Status) ===
+  // === SAVED ORDERS LIST (O(1) Grouping + Universal Search + 15-Row Pagination) ===
   if (orderState.view === 'LIST') {
     const orders = (await dbGetAll('orders')).sort((a, b) => b.id - a.id);
     const allChallans = await dbGetAll('challans');
     const firms = await dbGetAll('firms');
 
+    // Fast O(N) grouping by orderNo
+    const challansByOrdNo = {};
+    allChallans.forEach((c) => {
+      if (!c.orderNo) return;
+      const k = String(c.orderNo);
+      if (!challansByOrdNo[k]) challansByOrdNo[k] = [];
+      challansByOrdNo[k].push(c);
+    });
+
     const enriched = orders.map((o) => ({
       order: o,
-      status: window.stxComputeOrderStatus(o, allChallans)
+      status: window.stxComputeOrderStatus(o, challansByOrdNo[String(o.orderNo)] || [])
     }));
 
     const pendingCount = enriched.filter((x) => !x.status.isComplete).length;
@@ -214,24 +223,32 @@ async function renderOrderModule() {
     return;
   }
 
-  // === ORDER FORM VIEW ===
+  // === ORDER FORM VIEW (Fast Count + Max Order No) ===
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
   const folders = await dbGetAll('folders');
   const designs = await dbGetAll('designs');
-  const allOrders = await dbGetAll('orders');
-  const nextOrderNo = allOrders.length ? Math.max(...allOrders.map((o) => Number(o.orderNo) || 0)) + 1 : 1;
+
+  let totalOrdersCount = 0;
+  let nextOrderNo = 1;
+  if (typeof dbCount === 'function' && typeof dbGetMaxField === 'function') {
+    totalOrdersCount = await dbCount('orders');
+    nextOrderNo = (await dbGetMaxField('orders', 'orderNo')) + 1;
+  } else {
+    const allOrders = await dbGetAll('orders');
+    totalOrdersCount = allOrders.length;
+    nextOrderNo = allOrders.length ? Math.max(...allOrders.map((o) => Number(o.orderNo) || 0)) + 1 : 1;
+  }
 
   const agentSet = new Set();
   parties.forEach((p) => { if (p.agent) agentSet.add(p.agent.toUpperCase()); });
-  allOrders.forEach((o) => { if (o.agent) agentSet.add(o.agent.toUpperCase()); });
 
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
         <h2>3. Order Form (Rate Fix & Order Entry)</h2>
         <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['ordersListPager']; orderState.filter='ALL'; orderState.view='LIST'; renderOrderModule();">
-          📋 Saved Orders (${allOrders.length})
+          📋 Saved Orders (${totalOrdersCount})
         </button>
       </div>
 
