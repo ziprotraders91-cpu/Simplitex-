@@ -1,4 +1,4 @@
-// === SimpliTex Module 5 & 6 v2: Challan & A5 Packing Slip (Fast Indexed + Pending Order Tracker + Auto-Hide) ===
+// === SimpliTex Module 5 & 6 v3: Challan & A5 Packing Slip (Edit + Auto Stock Engine + Aligned + Pending Tracker) ===
 
 let challanState = {
   view: 'FORM',
@@ -6,7 +6,10 @@ let challanState = {
   linkedOrderNo: '',
   loadedParty: '',
   partyOrders: [],
-  allChallans: []
+  allChallans: [],
+  editId: null,
+  origChallan: null,
+  draft: null
 };
 
 if (!window.stxComputeOrderStatus) {
@@ -46,6 +49,10 @@ window.onTabChanged = function (tabId) {
   if (_prevTabHookCh) _prevTabHookCh(tabId);
   if (tabId === 'tab-challan') {
     challanState.view = 'FORM';
+    challanState.editId = null;
+    challanState.origChallan = null;
+    challanState.draft = null;
+    challanState.items = [];
     renderChallanModule();
   }
 };
@@ -54,10 +61,21 @@ const _prevEscHookCh = window.handleModuleEscape;
 window.handleModuleEscape = function () {
   if (_prevEscHookCh && _prevEscHookCh()) return true;
   const sec = document.querySelector('.tab-sec:not(.hidden)');
-  if (sec && sec.id === 'tab-challan' && challanState.view !== 'FORM') {
-    challanState.view = 'FORM';
-    renderChallanModule();
-    return true;
+  if (sec && sec.id === 'tab-challan') {
+    if (challanState.editId) {
+      challanState.editId = null;
+      challanState.origChallan = null;
+      challanState.draft = null;
+      challanState.items = [];
+      challanState.view = 'LIST';
+      renderChallanModule();
+      return true;
+    }
+    if (challanState.view !== 'FORM') {
+      challanState.view = 'FORM';
+      renderChallanModule();
+      return true;
+    }
   }
   return false;
 };
@@ -78,7 +96,7 @@ async function renderChallanModule() {
   if (typeof ensureOrderPrintSetup === 'function') ensureOrderPrintSetup();
   const box = document.getElementById('tab-challan');
 
-  // === VIEW 1: SAVED CHALLANS LIST (Universal Search + 15-Row Pager) ===
+  // === VIEW 1: SAVED CHALLANS LIST ===
   if (challanState.view === 'LIST') {
     const challans = (await dbGetAll('challans')).sort((a, b) => b.id - a.id);
     const firms = await dbGetAll('firms');
@@ -88,7 +106,7 @@ async function renderChallanModule() {
         <div class="card-head">
           <h2>📜 Saved Challans (${challans.length})</h2>
           <div>
-            <button class="btn btn-dark btn-sm" onclick="challanState.view='FORM'; challanState.items=[]; challanState.linkedOrderNo=''; challanState.loadedParty=''; renderChallanModule();">+ Naya Challan</button>
+            <button class="btn btn-dark btn-sm" onclick="challanState.view='FORM'; challanState.items=[]; challanState.linkedOrderNo=''; challanState.loadedParty=''; challanState.editId=null; challanState.origChallan=null; challanState.draft=null; renderChallanModule();">+ Naya Challan</button>
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
@@ -101,7 +119,7 @@ async function renderChallanModule() {
       items: challans,
       perPage: 15,
       placeholder: '🔍 Challan No., Party, City, Transport, Marka ya Saree search karein...',
-      headHtml: '<tr><th>Challan #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Pcs / Amount</th><th>Print & Reverse</th></tr>',
+      headHtml: '<tr><th>Challan #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Pcs / Amount</th><th>Action</th></tr>',
       getSearchText: (c) => {
         const f = firms.find((x) => x.id === Number(c.firmId));
         const itemTxt = (c.items || []).map((it) => it.designName).join(' ');
@@ -118,7 +136,8 @@ async function renderChallanModule() {
             <td><b>${c.totalPcs} Pcs</b><br/><small>₹${Number(c.totalAmount || 0).toLocaleString('en-IN')}</small></td>
             <td style="white-space:nowrap;">
               <button class="btn btn-dark btn-sm" onclick="printChallanById(${c.id})">🖨️ Challan</button>
-              <button class="btn btn-success btn-sm" onclick="printA5PackingSlipById(${c.id})">🏷️ A5 Slip</button>
+              <button class="btn btn-success btn-sm" onclick="printA5PackingSlipById(${c.id})">🏷️ Slip</button>
+              <button class="btn btn-light btn-sm" onclick="editChallanById(${c.id})">✏️ Edit</button>
               <button class="btn btn-danger btn-sm" onclick="reverseChallanById(${c.id})">↩️ Del</button>
             </td>
           </tr>
@@ -129,11 +148,14 @@ async function renderChallanModule() {
     return;
   }
 
-  // === VIEW 2: NEW CHALLAN FORM (Fast Count & Next Challan No) ===
+  // === VIEW 2: NEW / EDIT CHALLAN FORM ===
+  const d = challanState.draft;
+  const isEdit = !!(challanState.editId && d);
+
   challanState.loadedParty = '';
   challanState.partyOrders = [];
   challanState.allChallans = [];
-  challanState.linkedOrderNo = '';
+  if (!isEdit) challanState.linkedOrderNo = '';
 
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
@@ -153,24 +175,27 @@ async function renderChallanModule() {
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
-        <h2>5. Challan (Parcel ke Andar) & A5 Packing Slip</h2>
-        <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['challanListPager']; challanState.view='LIST'; renderChallanModule();">
-          📜 Saved Challans (${totalChallansCount})
-        </button>
+        <h2>${isEdit ? `✏️ Edit Challan (#${esc(d.challanNo)})` : '5. Challan (Parcel ke Andar) & A5 Packing Slip'}</h2>
+        <div>
+          ${isEdit ? `<button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Cancel Edit</button>` : ''}
+          <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['challanListPager']; challanState.view='LIST'; renderChallanModule();">
+            📜 Saved Challans (${totalChallansCount})
+          </button>
+        </div>
       </div>
 
-      <div class="grid-2">
+      <div class="grid-2" style="align-items:start;">
         <div>
           <label>Firm Chunein *</label>
           <select id="chFirmId">
-            ${firms.map((f) => `<option value="${f.id}">${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
+            ${firms.map((f) => `<option value="${f.id}" ${d && Number(d.firmId) === f.id ? 'selected' : ''}>${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
           </select>
         </div>
-        <div><label>Challan No. *</label><input type="number" id="chNo" value="${nextChNo}" /></div>
-        <div><label>Date *</label><input type="date" id="chDate" value="${todayISO()}" /></div>
+        <div><label>Challan No. *</label><input type="number" id="chNo" value="${d ? esc(d.challanNo) : nextChNo}" /></div>
+        <div><label>Date *</label><input type="date" id="chDate" value="${d ? esc(d.date) : todayISO()}" /></div>
         <div>
           <label>Party Name * (Pending Order Auto-Load)</label>
-          <input id="chPartyName" list="chPartyList" placeholder="e.g. SHREE SHARDA SAREE" onchange="onChallanPartyChange()" />
+          <input id="chPartyName" list="chPartyList" value="${d ? esc(d.partyName) : ''}" placeholder="e.g. SHREE SHARDA SAREE" onchange="onChallanPartyChange()" />
           <datalist id="chPartyList">
             ${parties.map((p) => `<option value="${esc(p.name)}">`).join('')}
           </datalist>
@@ -181,10 +206,10 @@ async function renderChallanModule() {
             <option value="">-- Pehle Party Chunein --</option>
           </select>
         </div>
-        <div><label>City *</label><input id="chPartyCity" placeholder="e.g. CHIPLOON, MUMBAI" /></div>
-        <div><label>Full Address</label><input id="chPartyAddr" placeholder="Shop address..." /></div>
-        <div><label>Marka</label><input id="chMarka" placeholder="e.g. SSS" /></div>
-        <div><label>Transport</label><input id="chTransport" placeholder="e.g. VRL" /></div>
+        <div><label>City *</label><input id="chPartyCity" value="${d ? esc(d.partyCity) : ''}" placeholder="e.g. CHIPLOON, MUMBAI" /></div>
+        <div><label>Full Address</label><input id="chPartyAddr" value="${d ? esc(d.partyAddress) : ''}" placeholder="Shop address..." /></div>
+        <div><label>Marka</label><input id="chMarka" value="${d ? esc(d.marka) : ''}" placeholder="e.g. SSS" /></div>
+        <div style="grid-column: 1 / -1;"><label>Transport</label><input id="chTransport" value="${d ? esc(d.transport) : ''}" placeholder="e.g. VRL" /></div>
       </div>
 
       <!-- Live Pending Order Tracker Box -->
@@ -201,7 +226,7 @@ async function renderChallanModule() {
           </label>
         </div>
 
-        <div class="grid-2">
+        <div class="grid-2" style="align-items:start;">
           <div>
             <label>Barcode Scan / Saree Name *</label>
             <input id="chScanInput" list="chReadyList" placeholder="Scan e.g. RASHMIKA KT" data-custom-enter="1"
@@ -217,7 +242,8 @@ async function renderChallanModule() {
                    onkeydown="if(event.key==='Enter'){ event.preventDefault(); addChallanRow(); }" />
           </div>
           <div>
-            <button type="button" class="btn btn-dark" style="height:40px;" onclick="addChallanRow()">+ Add Saree</button>
+            <label style="visibility:hidden;">.</label>
+            <button type="button" class="btn btn-dark" style="height:40px; width:100%;" onclick="addChallanRow()">+ Add Saree</button>
           </div>
         </div>
         <div id="chScanHint" style="font-size:12px; color:#15803d; margin-top:6px;"></div>
@@ -230,42 +256,75 @@ async function renderChallanModule() {
         </table>
       </div>
 
-      <div class="grid-2" style="margin-top:12px;">
-        <div style="font-size:16px; font-weight:800; padding:8px 0;">
+      <div class="grid-2" style="margin-top:12px; align-items:start;">
+        <div style="font-size:16px; font-weight:800; padding:12px 0;">
           Total Pcs: <span id="chTotalPcs" style="color:#1d4ed8;">0</span> &nbsp;|&nbsp;
           Amount: <span id="chTotalAmt" style="color:#15803d;">₹0</span>
         </div>
         <div>
           <label>Remarks (Optional)</label>
-          <input id="chRemarks" placeholder="Remarks..." />
+          <input id="chRemarks" value="${d ? esc(d.remarks) : ''}" placeholder="Remarks..." />
         </div>
       </div>
 
       <button type="button" class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveChallanForm()">
-        ✅ Save Challan & Print / A5 Packing Slip (Ctrl+S)
+        ${isEdit ? '✅ Update Challan & Sync Stock (Ctrl+S)' : '✅ Save Challan & Print / A5 Packing Slip (Ctrl+S)'}
       </button>
     </div>
   `;
 
+  if (isEdit && d.partyName) {
+    await onChallanPartyChange(true);
+    const ordSel = document.getElementById('chOrderSelect');
+    if (ordSel && d.orderNo) {
+      ordSel.value = String(d.orderNo);
+      challanState.linkedOrderNo = String(d.orderNo);
+    }
+  }
+
   renderChallanItemsTable();
-  setTimeout(() => document.getElementById('chPartyName')?.focus(), 50);
+  setTimeout(() => document.getElementById(isEdit ? 'chScanInput' : 'chPartyName')?.focus(), 50);
 }
 
-async function onChallanPartyChange() {
+async function editChallanById(id) {
+  const c = await dbGet('challans', id);
+  if (!c) return;
+  challanState.editId = c.id;
+  challanState.origChallan = c;
+  challanState.items = (c.items || []).map((it) => ({ ...it }));
+  challanState.linkedOrderNo = c.orderNo || '';
+  challanState.draft = {
+    firmId: c.firmId,
+    challanNo: c.challanNo,
+    date: c.date,
+    partyName: c.partyName || '',
+    partyCity: c.partyCity || '',
+    partyAddress: c.partyAddress || '',
+    marka: c.marka || '',
+    transport: c.transport || '',
+    orderNo: c.orderNo || '',
+    remarks: c.remarks || ''
+  };
+  challanState.view = 'FORM';
+  renderChallanModule();
+}
+
+async function onChallanPartyChange(preserveFields) {
   const partyName = document.getElementById('chPartyName').value.trim().toUpperCase();
   if (!partyName) return;
 
   challanState.loadedParty = partyName;
-  const parties = await dbGetAll('parties');
-  const p = parties.find((x) => x.name.toUpperCase() === partyName);
-  if (p) {
-    document.getElementById('chPartyCity').value = p.city || '';
-    document.getElementById('chPartyAddr').value = p.address || p.city || '';
-    document.getElementById('chMarka').value = p.marka || '';
-    document.getElementById('chTransport').value = p.transport || '';
+  if (!preserveFields) {
+    const parties = await dbGetAll('parties');
+    const p = parties.find((x) => x.name.toUpperCase() === partyName);
+    if (p) {
+      document.getElementById('chPartyCity').value = p.city || '';
+      document.getElementById('chPartyAddr').value = p.address || p.city || '';
+      document.getElementById('chMarka').value = p.marka || '';
+      document.getElementById('chTransport').value = p.transport || '';
+    }
   }
 
-  // Fast Indexed Query: Sirf is party ke orders aur challans load honge
   const partyOrdersRaw = (typeof dbGetByIndex === 'function')
     ? await dbGetByIndex('orders', 'partyName', partyName)
     : (await dbGetAll('orders')).filter((o) => o.partyName.toUpperCase() === partyName);
@@ -274,15 +333,21 @@ async function onChallanPartyChange() {
     ? await dbGetByIndex('challans', 'partyName', partyName)
     : (await dbGetAll('challans')).filter((c) => (c.partyName || '').toUpperCase() === partyName);
 
+  // Edit mode me current challan ko exclude karein taaki double-count na ho
+  const otherChallans = challanState.editId
+    ? partyChallansRaw.filter((x) => x.id !== challanState.editId)
+    : partyChallansRaw;
+
   const partyOrders = partyOrdersRaw.sort((a, b) => b.id - a.id);
   challanState.partyOrders = partyOrders;
-  challanState.allChallans = partyChallansRaw;
+  challanState.allChallans = otherChallans;
 
-  // Sirf PENDING orders hi dropdown me rakhein (Complete orders dropdown se hata diye jayenge)
   const pendingOrders = [];
   partyOrders.forEach((o) => {
-    const st = window.stxComputeOrderStatus(o, partyChallansRaw);
-    if (!st.isComplete) pendingOrders.push({ order: o, status: st });
+    const st = window.stxComputeOrderStatus(o, otherChallans);
+    if (!st.isComplete || (challanState.editId && String(o.orderNo) === String(challanState.linkedOrderNo))) {
+      pendingOrders.push({ order: o, status: st });
+    }
   });
 
   const ordSel = document.getElementById('chOrderSelect');
@@ -291,14 +356,16 @@ async function onChallanPartyChange() {
       pendingOrders.map(({ order: o, status: st }) =>
         `<option value="${o.orderNo}">Order #${o.orderNo} (${o.date}) — ${st.totalPending} Pcs Baki</option>`
       ).join('');
-    ordSel.value = String(pendingOrders[0].order.orderNo);
-    challanState.linkedOrderNo = String(pendingOrders[0].order.orderNo);
+    if (!preserveFields) {
+      ordSel.value = String(pendingOrders[0].order.orderNo);
+      challanState.linkedOrderNo = String(pendingOrders[0].order.orderNo);
+    }
   } else if (partyOrders.length) {
     ordSel.innerHTML = '<option value="">-- Saare Orders Complete Ho Chuke Hain ✅ --</option>';
-    challanState.linkedOrderNo = '';
+    if (!preserveFields) challanState.linkedOrderNo = '';
   } else {
     ordSel.innerHTML = '<option value="">-- Is Party ka Koi Order Nahi --</option>';
-    challanState.linkedOrderNo = '';
+    if (!preserveFields) challanState.linkedOrderNo = '';
   }
 
   renderChallanOrderTracker();
@@ -586,32 +653,43 @@ async function saveChallanForm() {
     if (!partyName || !partyCity) return alert('Party Name aur City zaroori hai!');
     if (!challanState.items.length) return alert('Kam se kam 1 Saree add karein!');
 
-    for (const it of challanState.items) {
-      const r = await dbGet('readyStock', it.skuKey);
-      const avail = r ? r.qty : 0;
-      if (it.qty > avail) {
-        if (!confirm(`"${it.designName} (${it.firmCode})" ka Ready Stock sirf ${avail} Pcs hai, aur aap ${it.qty} Pcs bhej rahe ho. Phir bhi save karein?`)) return;
-      }
+    const isEdit = !!(challanState.editId && challanState.origChallan);
+    const origQtyMap = {};
+    if (isEdit) {
+      (challanState.origChallan.items || []).forEach((it) => {
+        origQtyMap[it.skuKey] = (origQtyMap[it.skuKey] || 0) + (Number(it.qty) || 0);
+      });
     }
-    for (const it of challanState.items) {
-      const r = await dbGet('readyStock', it.skuKey);
-      if (r) {
-        await dbPut('readyStock', { ...r, qty: Math.max(0, r.qty - it.qty), updatedAt: new Date().toISOString() });
+
+    const neededMap = {};
+    challanState.items.forEach((it) => {
+      neededMap[it.skuKey] = (neededMap[it.skuKey] || 0) + (Number(it.qty) || 0);
+    });
+
+    for (const skuKey of Object.keys(neededMap)) {
+      const r = await dbGet('readyStock', skuKey);
+      const avail = (r ? r.qty : 0) + (origQtyMap[skuKey] || 0);
+      if (neededMap[skuKey] > avail) {
+        const label = skuKey.replace('__', ' (') + ')';
+        if (!confirm(`"${label}" ka Ready Stock sirf ${avail} Pcs hai, aur aap ${neededMap[skuKey]} Pcs bhej rahe ho. Phir bhi save karein?`)) return;
       }
     }
 
     const totalPcs = challanState.items.reduce((s, x) => s + x.qty, 0);
     const totalAmount = challanState.items.reduce((s, x) => s + x.amount, 0);
 
-    const chId = await dbPut('challans', {
+    const payload = {
       challanNo, date, firmId, orderNo, partyName, partyCity, partyAddress,
       marka, transport, items: challanState.items, totalPcs, totalAmount, remarks,
-      createdAt: Date.now()
-    });
+      createdAt: isEdit ? challanState.origChallan.createdAt : Date.now()
+    };
+    if (isEdit) payload.id = challanState.editId;
 
+    const chId = await dbPut('challans', payload);
+
+    if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
 
-    // Check Order Completion Status after saving (Fast Indexed Query)
     let orderMsg = '';
     if (orderNo) {
       const partyOrders = (typeof dbGetByIndex === 'function')
@@ -633,7 +711,7 @@ async function saveChallanForm() {
     }
 
     const choice = prompt(
-      `✅ Challan #${challanNo} Save ho gaya!` +
+      `✅ Challan #${challanNo} ${isEdit ? 'Update' : 'Save'} ho gaya!` +
       orderMsg +
       `\n1 likhein -> Challan Print (Half-A4)\n` +
       `2 likhein -> A5 Packing Slip Print\n` +
@@ -643,6 +721,10 @@ async function saveChallanForm() {
     challanState.items = [];
     challanState.linkedOrderNo = '';
     challanState.loadedParty = '';
+    challanState.editId = null;
+    challanState.origChallan = null;
+    challanState.draft = null;
+    if (isEdit) challanState.view = 'LIST';
     await renderChallanModule();
 
     if (choice === '1') await printChallanById(chId);
@@ -786,15 +868,10 @@ async function reverseChallanById(id) {
   try {
     const c = await dbGet('challans', id);
     if (!c) return;
-    if (!confirm(`Challan #${c.challanNo} Delete karke ${c.totalPcs} Pcs wapas Ready Stock me daalna hai?`)) return;
+    if (!confirm(`Challan #${c.challanNo} Delete karke Stock dobara calculate karna hai?`)) return;
 
-    for (const it of (c.items || [])) {
-      const r = await dbGet('readyStock', it.skuKey);
-      if (r) {
-        await dbPut('readyStock', { ...r, qty: r.qty + it.qty, updatedAt: new Date().toISOString() });
-      }
-    }
     await dbDelete('challans', id);
+    if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
     renderChallanModule();
   } catch (err) { alert('Delete Error: ' + err.message); }
