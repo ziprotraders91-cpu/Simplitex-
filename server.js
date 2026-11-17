@@ -48,7 +48,6 @@ const MIME_TYPES = {
   '.woff2': 'font/woff2'
 };
 
-// In-memory DB cache + SSE clients + Sequential Write Queue
 const dbCache = {};
 let metaCache = {
   version: 1,
@@ -130,7 +129,6 @@ function initDatabase() {
     }
   }
 
-  // Seed default masters if completely empty (same as SimpliTexDB v3)
   let seeded = false;
   if (dbCache.jobWorkTypes.length === 0) {
     dbCache.jobWorkTypes = [
@@ -178,9 +176,8 @@ function createDailyAutoBackup() {
       console.log(`[SimpliTex Server] Auto backup created: ${path.basename(todayFile)}`);
     }
 
-    // Keep only latest 15 auto backups
     const files = fs.readdirSync(BACKUP_DIR)
-      .filter(f => f.startsWith('auto-') && f.endsWith('.json'))
+      .filter((f) => f.startsWith('auto-') && f.endsWith('.json'))
       .sort();
     while (files.length > 15) {
       const oldest = files.shift();
@@ -239,7 +236,7 @@ function applySingleOp(storeName, action, payload) {
 
   if (action === 'delete') {
     const key = normalizeKey(storeName, payload.key);
-    const idx = list.findIndex(r => r && r[kp] === key);
+    const idx = list.findIndex((r) => r && r[kp] === key);
     if (idx !== -1) list.splice(idx, 1);
     return { ok: true, key };
   }
@@ -267,7 +264,7 @@ function applySingleOp(storeName, action, payload) {
     }
 
     const key = item[kp];
-    const existingIdx = list.findIndex(r => r && r[kp] === key);
+    const existingIdx = list.findIndex((r) => r && r[kp] === key);
 
     if (action === 'add' && existingIdx !== -1) {
       const err = new Error(`Key "${key}" already exists in "${storeName}"`);
@@ -311,7 +308,7 @@ function readRequestBody(req, maxBytes = 50 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
-    req.on('data', chunk => {
+    req.on('data', (chunk) => {
       total += chunk.length;
       if (total > maxBytes) {
         reject(new Error('Request payload too large'));
@@ -356,7 +353,6 @@ function serveStaticFile(reqPath, res) {
     return res.end('Bad Request');
   }
 
-  // Prevent reading server data folder or escaping root directory
   const resolved = path.resolve(ROOT_DIR, '.' + cleanPath);
   if (!resolved.startsWith(ROOT_DIR + path.sep) && resolved !== path.join(ROOT_DIR, 'index.html')) {
     res.writeHead(403);
@@ -397,7 +393,6 @@ async function handleApi(req, res, urlObj) {
     return res.end();
   }
 
-  // 1. Ping / Health Check
   if (method === 'GET' && pathname === '/api/ping') {
     return sendJson(res, 200, {
       ok: true,
@@ -409,7 +404,6 @@ async function handleApi(req, res, urlObj) {
     });
   }
 
-  // 2. SSE Live Events Stream
   if (method === 'GET' && pathname === '/api/events') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -425,12 +419,10 @@ async function handleApi(req, res, urlObj) {
     return;
   }
 
-  // 3. Full Snapshot (All Stores + Meta)
   if (method === 'GET' && pathname === '/api/snapshot') {
     return sendJson(res, 200, buildFullSnapshot());
   }
 
-  // 4. Full Export (Downloadable Backup JSON)
   if (method === 'GET' && pathname === '/api/export-full') {
     const snap = buildFullSnapshot();
     res.writeHead(200, {
@@ -441,7 +433,6 @@ async function handleApi(req, res, urlObj) {
     return res.end(JSON.stringify(snap, null, 2));
   }
 
-  // 5. Full Import (Migrate existing JSON Backup to LAN Server)
   if (method === 'POST' && pathname === '/api/import-full') {
     const body = await readRequestBody(req);
     const incomingStores = body.stores || body.data || body;
@@ -479,7 +470,6 @@ async function handleApi(req, res, urlObj) {
     return sendJson(res, 200, result);
   }
 
-  // 6. Shared Meta / LocalStorage Keys
   if (method === 'GET' && pathname === '/api/meta') {
     return sendJson(res, 200, {
       ok: true,
@@ -514,7 +504,6 @@ async function handleApi(req, res, urlObj) {
     return sendJson(res, 200, result);
   }
 
-  // 7. Atomic Multi-Store Batch Transaction
   if (method === 'POST' && pathname === '/api/tx') {
     const body = await readRequestBody(req);
     const ops = Array.isArray(body.ops) ? body.ops : [];
@@ -523,7 +512,6 @@ async function handleApi(req, res, urlObj) {
     }
 
     const result = await withWriteLock(() => {
-      // Snapshot rollback copy in case any op fails mid-tx
       const touchedStores = new Set();
       for (const op of ops) {
         if (!STORES[op.store]) throw new Error(`Unknown store: ${op.store}`);
@@ -561,8 +549,7 @@ async function handleApi(req, res, urlObj) {
     return sendJson(res, 200, result);
   }
 
-  // 8. Store-Level CRUD Routes: /api/store/:name...
-  const parts = pathname.split('/').filter(Boolean); // ['api', 'store', name, ...]
+  const parts = pathname.split('/').filter(Boolean);
   if (parts[0] === 'api' && parts[1] === 'store' && parts[2]) {
     const storeName = decodeURIComponent(parts[2]);
     const cfg = STORES[storeName];
@@ -570,7 +557,6 @@ async function handleApi(req, res, urlObj) {
       return sendJson(res, 404, { ok: false, error: `Store "${storeName}" not found` });
     }
 
-    // GET /api/store/:name
     if (method === 'GET' && parts.length === 3) {
       return sendJson(res, 200, {
         ok: true,
@@ -579,14 +565,12 @@ async function handleApi(req, res, urlObj) {
       });
     }
 
-    // GET /api/store/:name/:key
     if (method === 'GET' && parts.length === 4) {
       const key = normalizeKey(storeName, decodeURIComponent(parts[3]));
-      const found = dbCache[storeName].find(r => r && r[cfg.keyPath] === key) || null;
+      const found = dbCache[storeName].find((r) => r && r[cfg.keyPath] === key) || null;
       return sendJson(res, 200, { ok: true, version: metaCache.version, item: found });
     }
 
-    // POST /api/store/:name/add
     if (method === 'POST' && parts[3] === 'add') {
       const body = await readRequestBody(req);
       const val = body.value !== undefined ? body.value : body;
@@ -600,7 +584,6 @@ async function handleApi(req, res, urlObj) {
       return sendJson(res, 200, result);
     }
 
-    // PUT or POST /api/store/:name/put
     if ((method === 'PUT' || method === 'POST') && parts[3] === 'put') {
       const body = await readRequestBody(req);
       const val = body.value !== undefined ? body.value : body;
@@ -614,7 +597,6 @@ async function handleApi(req, res, urlObj) {
       return sendJson(res, 200, result);
     }
 
-    // POST /api/store/:name/clear
     if (method === 'POST' && parts[3] === 'clear') {
       const result = await withWriteLock(() => {
         applySingleOp(storeName, 'clear', {});
@@ -622,4 +604,71 @@ async function handleApi(req, res, urlObj) {
         persistDirtyStores([storeName], true);
         broadcastChange([storeName], clientId);
         return { ok: true, version: metaCache.version };
-     
+      });
+      return sendJson(res, 200, result);
+    }
+
+    if (method === 'DELETE' && parts.length === 4) {
+      const rawKey = decodeURIComponent(parts[3]);
+      const result = await withWriteLock(() => {
+        const resOp = applySingleOp(storeName, 'delete', { key: rawKey });
+        metaCache.version += 1;
+        persistDirtyStores([storeName], true);
+        broadcastChange([storeName], clientId);
+        return { ...resOp, version: metaCache.version };
+      });
+      return sendJson(res, 200, result);
+    }
+  }
+
+  return sendJson(res, 404, { ok: false, error: 'API route not found' });
+}
+
+initDatabase();
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (urlObj.pathname.startsWith('/api/')) {
+      await handleApi(req, res, urlObj);
+    } else {
+      serveStaticFile(urlObj.pathname, res);
+    }
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error('[SimpliTex Server] Error:', err.message);
+    if (!res.headersSent) {
+      sendJson(res, status, { ok: false, error: err.message || 'Server error' });
+    }
+  }
+});
+
+setInterval(() => {
+  for (const res of sseClients) {
+    try {
+      res.write(': keepalive\n\n');
+    } catch (_) {
+      sseClients.delete(res);
+    }
+  }
+}, 25000);
+
+server.listen(PORT, HOST, () => {
+  const ips = getLanIPs();
+  console.log('\n====================================================');
+  console.log('   SimpliTex ERP - Offline Multi-PC LAN Server');
+  console.log('====================================================');
+  console.log(`   Data Folder : ${DATA_DIR}`);
+  console.log(`   This PC URL : http://localhost:${PORT}`);
+  if (ips.length > 0) {
+    ips.forEach((ip) => {
+      console.log(`   Other PCs   : http://${ip}:${PORT}`);
+    });
+  } else {
+    console.log('   Other PCs   : Connect Wi-Fi/LAN & restart to see IP');
+  }
+  console.log('====================================================');
+  console.log('   Keep this window OPEN while working on other PCs.');
+  console.log('   Press Ctrl+C to stop server safely.\n');
+});
+// === END OF SERVER.JS ===
