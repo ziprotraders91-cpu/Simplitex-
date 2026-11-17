@@ -21,6 +21,19 @@ function formatDMY(iso) {
   return `${d}.${m}.${y.slice(-2)}`;
 }
 
+function getSavedWorkDetails() {
+  try { return JSON.parse(localStorage.getItem('simplitex_jw_work_details') || '[]'); } catch (_) { return []; }
+}
+
+function rememberWorkDetail(txt) {
+  if (!txt) return;
+  const list = getSavedWorkDetails();
+  if (!list.includes(txt)) {
+    list.unshift(txt);
+    localStorage.setItem('simplitex_jw_work_details', JSON.stringify(list.slice(0, 100)));
+  }
+}
+
 function ensureJWPrintSetup(pageCss) {
   if (!document.getElementById('simplitexPrintRoot')) {
     const div = document.createElement('div');
@@ -89,7 +102,6 @@ async function renderJWOutward() {
   await openDB();
   const box = document.getElementById('tab-jobwork');
 
-  // STEP 1: JOB WORK TYPE
   if (jwState.step === 'TYPE') {
     const types = await dbGetAll('jobWorkTypes');
     box.innerHTML = `
@@ -111,7 +123,6 @@ async function renderJWOutward() {
     return;
   }
 
-  // STEP 2: WORKERS LIST
   if (jwState.step === 'WORKER') {
     const allWorkers = await dbGetAll('jobWorkers');
     const workers = allWorkers.filter((w) => !w.jobWorkType || w.jobWorkType.toUpperCase() === jwState.jwType.toUpperCase());
@@ -162,7 +173,6 @@ async function renderJWOutward() {
     return;
   }
 
-  // STEP 2B: WORKER PASSBOOK + PRINT BILL
   if (jwState.step === 'PASSBOOK') {
     const jwUpper = jwState.jwType.toUpperCase();
     const wName = jwState.worker.name.toUpperCase();
@@ -186,7 +196,7 @@ async function renderJWOutward() {
         <div style="overflow-x:auto;">
           <table>
             <thead>
-              <tr><th>Date / No.</th><th>Kaam</th><th>Batch / Detail</th><th>Pcs</th><th>Note</th><th>Action</th></tr>
+              <tr><th>Date / No.</th><th>Kaam</th><th>Batch / Detail</th><th>Pcs</th><th>Kya Kaam Hoga</th><th>Action</th></tr>
             </thead>
             <tbody>
               ${ledger.map((l) => {
@@ -200,7 +210,7 @@ async function renderJWOutward() {
                     <td><b style="color:${isOut ? '#1d4ed8' : '#15803d'};">${isOut ? '📤 Bheja (OUT)' : '📥 Wapas (IN)'}</b></td>
                     <td><small>${esc(detail)}</small></td>
                     <td><b>${isOut ? '+' : '-'}${l.qty}</b></td>
-                    <td><small>${esc(l.note || '-')}</small></td>
+                    <td><small><b>${esc(l.note || '-')}</b></small></td>
                     <td style="white-space:nowrap;">
                       ${isOut ? `<button class="btn btn-dark btn-sm" onclick="printJobWorkBill(${l.id})">🖨️ A5 Bill</button>` : ''}
                       <button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${l.id}, 'PASSBOOK')">↩️ Del</button>
@@ -216,12 +226,13 @@ async function renderJWOutward() {
     return;
   }
 
-  // STEP 3: BATCH FORM (Swarovski / Job Work Bill Format Ready)
+  // STEP 3: BATCH FORM
   if (jwState.step === 'BATCH') {
     const stocks = (await dbGetAll('bunkarStock')).filter((s) => s.qty > 0);
     const firms = await dbGetAll('firms');
     const allLedger = await dbGetAll('jobWorkLedger');
     const maxNo = allLedger.reduce((m, x) => Math.max(m, Number(x.jobWorkNo) || 0), 0);
+    const savedWorks = getSavedWorkDetails();
 
     if (!jwState.meta) {
       jwState.meta = {
@@ -257,6 +268,16 @@ async function renderJWOutward() {
           </div>
           <div><label>Dispatched through (Transport)</label><input id="batchTransport" value="${esc(m.transport)}" placeholder="e.g. Kashi Express" onchange="syncBatchMeta()" /></div>
           <div><label>Destination (City)</label><input id="batchDestination" value="${esc(m.destination)}" placeholder="e.g. VARANASI" onchange="syncBatchMeta()" /></div>
+        </div>
+
+        <!-- PROMINENT JOB WORK / SWAROVSKI DESIGN WORK FIELD -->
+        <div style="background:#fefce8; border:1px solid #fde047; padding:10px; border-radius:8px; margin-bottom:10px;">
+          <label style="color:#854d0e; font-size:13px;">✨ Kya Kaam / Design Hoga? * (Bill ke neeche Bold print hoga)</label>
+          <input id="batchNote" list="jwWorkDetailList" value="${esc(m.note)}"
+                 placeholder="e.g. GAWATI ZARI CONTRAST ANCHAL" oninput="syncBatchMeta()" />
+          <datalist id="jwWorkDetailList">
+            ${savedWorks.map((w) => `<option value="${esc(w)}">`).join('')}
+          </datalist>
         </div>
 
         <!-- Keyboard Fast Batch Entry -->
@@ -295,11 +316,6 @@ async function renderJWOutward() {
           </tbody>
         </table>
 
-        <div style="margin-top:10px;">
-          <label>Bottom Work / Quality Line (Bill ke neeche bold print hoga)</label>
-          <input id="batchNote" value="${esc(m.note)}" placeholder="e.g. GAWATI ZARI CONTRAST ANCHAL" onchange="syncBatchMeta()" />
-        </div>
-
         <div style="display:flex; align-items:center; justify-content:space-between; margin-top:14px;">
           <div style="font-size:18px; font-weight:800;">TOTAL: <span style="color:#1d4ed8;">${totalBatch} Pcs</span></div>
           <button type="button" class="btn btn-success primary-save-btn" onclick="saveBatchOutward()">
@@ -308,7 +324,7 @@ async function renderJWOutward() {
         </div>
       </div>
     `;
-    setTimeout(() => document.getElementById('batchBunkarInput')?.focus(), 50);
+    setTimeout(() => document.getElementById('batchNote')?.focus(), 50);
   }
 }
 
@@ -387,6 +403,7 @@ async function addBatchRow() {
   bInput.value = '';
   qInput.value = '';
   await renderJWOutward();
+  setTimeout(() => document.getElementById('batchBunkarInput')?.focus(), 50);
 }
 
 function removeBatchRow(idx) {
@@ -400,6 +417,12 @@ async function saveBatchOutward() {
     syncBatchMeta();
     if (!jwState.batchRows.length) return alert('Batch khali hai! Kam se kam 1 saree add karein.');
     const m = jwState.meta;
+    if (!m.note) {
+      const entered = prompt('Bill ke neeche kya kaam print karna hai? (e.g. GAWATI ZARI CONTRAST ANCHAL)');
+      if (entered && entered.trim()) m.note = entered.trim().toUpperCase();
+    }
+    if (m.note) rememberWorkDetail(m.note);
+
     const jwTypeUpper = jwState.jwType.toUpperCase();
     const workerName = jwState.worker.name.toUpperCase();
 
@@ -411,7 +434,6 @@ async function saveBatchOutward() {
       totalQty += row.qty;
     }
 
-    // Worker ke default transport/city update karna
     if (m.transport || m.destination) {
       await dbPut('jobWorkers', {
         ...jwState.worker,
@@ -446,7 +468,7 @@ async function saveBatchOutward() {
   } catch (err) { alert('Save Error: ' + err.message); }
 }
 
-// === EXACT A5 (HALF-A4) JOB WORK BILL PRINT (NO EMPTY BOXES) ===
+// === EXACT A5 (HALF-A4) JOB WORK BILL PRINT ===
 async function printJobWorkBill(ledgerId) {
   const l = await dbGet('jobWorkLedger', ledgerId);
   if (!l) return;
@@ -462,7 +484,6 @@ async function printJobWorkBill(ledgerId) {
     <div style="font-family:Arial,sans-serif; width:100%; max-width:196mm; margin:0 auto; color:#000;">
       <table style="width:100%; border-collapse:collapse; border:1.5px solid #000; font-size:11.5px;">
         <tr>
-          <!-- Left: Firm & Worker Info -->
           <td style="width:55%; vertical-align:top; padding:0; border:1px solid #000;">
             <div style="padding:6px 8px; border-bottom:1px solid #000;">
               <div style="font-size:14px; font-weight:800;">${esc(firm.name)}</div>
@@ -477,7 +498,6 @@ async function printJobWorkBill(ledgerId) {
             </div>
           </td>
 
-          <!-- Right: Job Work No, Dated, Transport, Destination (Bina Khali Box ke) -->
           <td style="width:45%; vertical-align:top; padding:0; border:1px solid #000;">
             <table style="width:100%; border-collapse:collapse; height:100%; font-size:11.5px;">
               <tr>
@@ -505,7 +525,6 @@ async function printJobWorkBill(ledgerId) {
         </tr>
       </table>
 
-      <!-- Items Table (Sirf 3 Columns: Sl No., Description of Goods, QUANTITY) -->
       <table style="width:100%; border-collapse:collapse; border:1.5px solid #000; border-top:none; font-size:12px;">
         <thead>
           <tr>
@@ -535,7 +554,7 @@ async function printJobWorkBill(ledgerId) {
       </table>
 
       ${l.note ? `
-        <div style="text-align:center; font-weight:900; font-size:14px; margin-top:6px; letter-spacing:0.5px;">
+        <div style="text-align:center; font-weight:900; font-size:15px; margin-top:7px; letter-spacing:0.6px; text-transform:uppercase;">
           ${esc(l.note)}
         </div>
       ` : ''}
