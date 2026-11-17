@@ -1,4 +1,4 @@
-// === SimpliTex File 5: Daily Daybook & Bunkar Passbook (15-Row Pager + Universal Search) ===
+// === SimpliTex File 5 v2: Daily Daybook & Bunkar Passbook (Indexed Date Lookup + 15-Row Pager) ===
 
 const _DBK_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
 let daybookState = { date: '', showAll: false };
@@ -72,11 +72,13 @@ window.handleModuleEscape = function () {
   return false;
 };
 
-// === 1. BUNKAR PASSBOOK (15-Row Pager + Universal Search) ===
+// === 1. BUNKAR PASSBOOK (Indexed Barcoding + 15-Row Pager) ===
 async function openBunkarPassbook(bunkarName) {
   await openDB();
   const jwLedger = await dbGetAll('jobWorkLedger');
-  const bcLogs = await dbGetAll('barcodingLogs');
+  const bcLogs = (typeof dbGetByIndex === 'function')
+    ? await dbGetByIndex('barcodingLogs', 'sourceName', bunkarName)
+    : (await dbGetAll('barcodingLogs')).filter((b) => b.sourceName === bunkarName);
   const curStock = await dbGet('bunkarStock', bunkarName);
 
   const entries = [];
@@ -103,7 +105,8 @@ async function openBunkarPassbook(bunkarName) {
   bcLogs.forEach((b) => {
     if (b.sourceName === bunkarName) {
       entries.push({
-        date: b.date, ts: b.createdAt || 0, type: '🏷️ Barcoding',
+        date: b.date, ts: b.createdAt || 0,
+        type: b.mode === 'STOCK_CONVERT' ? '🔄 Stock Convert' : '🏷️ Barcoding',
         detail: `${b.designName} (${b.firmCode})`, qtyText: `-${b.qty}`, color: '#1d4ed8'
       });
     }
@@ -149,19 +152,30 @@ async function openBunkarPassbook(bunkarName) {
   card.scrollIntoView({ behavior: 'smooth' });
 }
 
-// === 2. DAILY DAYBOOK (15-Row Pager + Universal Search) ===
+// === 2. DAILY DAYBOOK (Fast Date-Indexed Lookup + 15-Row Pager) ===
 async function renderDaybook() {
   await openDB();
   const box = document.getElementById('tab-daybook');
   if (!box) return;
 
   const targetDate = daybookState.date || _todayDBK();
-  const matchDate = (d) => daybookState.showAll || d === targetDate;
+  const useIndex = !daybookState.showAll && typeof dbGetByIndex === 'function';
 
-  const jwLedger = (await dbGetAll('jobWorkLedger')).filter((x) => matchDate(x.date));
-  const bcLogs = (await dbGetAll('barcodingLogs')).filter((x) => matchDate(x.date));
-  const orders = (await dbGetAll('orders')).filter((x) => matchDate(x.date));
-  const challans = (await dbGetAll('challans')).filter((x) => matchDate(x.date));
+  const jwLedger = useIndex
+    ? await dbGetByIndex('jobWorkLedger', 'date', targetDate)
+    : (await dbGetAll('jobWorkLedger')).filter((x) => daybookState.showAll || x.date === targetDate);
+
+  const bcLogs = useIndex
+    ? await dbGetByIndex('barcodingLogs', 'date', targetDate)
+    : (await dbGetAll('barcodingLogs')).filter((x) => daybookState.showAll || x.date === targetDate);
+
+  const orders = useIndex
+    ? await dbGetByIndex('orders', 'date', targetDate)
+    : (await dbGetAll('orders')).filter((x) => daybookState.showAll || x.date === targetDate);
+
+  const challans = useIndex
+    ? await dbGetByIndex('challans', 'date', targetDate)
+    : (await dbGetAll('challans')).filter((x) => daybookState.showAll || x.date === targetDate);
 
   let sumBaithak = 0, sumJWOut = 0, sumJWIn = 0, sumBarcoded = 0, sumChallanPcs = 0, sumChallanAmt = 0;
   const rows = [];
@@ -183,7 +197,8 @@ async function renderDaybook() {
   bcLogs.forEach((b) => {
     sumBarcoded += b.qty;
     rows.push({
-      date: b.date, ts: b.createdAt || 0, mod: '🏷️ Barcoding',
+      date: b.date, ts: b.createdAt || 0,
+      mod: b.mode === 'STOCK_CONVERT' ? '🔄 Stock Convert' : '🏷️ Barcoding',
       who: `${b.designName} (${b.firmCode})`,
       detail: `From: ${b.sourceName === _DBK_POOL ? 'JW Pool' : b.sourceName}`, val: `${b.qty} Pcs`
     });
