@@ -1,4 +1,4 @@
-// === SimpliTex File 5 v2: Daily Daybook & Bunkar Passbook (Indexed Date Lookup + 15-Row Pager) ===
+// === SimpliTex File 5 v3: Daily Daybook & Bunkar Passbook (2-Stage Barcoding + Indexed Lookup) ===
 
 const _DBK_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
 let daybookState = { date: '', showAll: false };
@@ -103,11 +103,13 @@ async function openBunkarPassbook(bunkarName) {
   });
 
   bcLogs.forEach((b) => {
-    if (b.sourceName === bunkarName) {
+    if (b.sourceName === bunkarName && !b.fromConverted) {
+      const isConv = b.mode === 'STOCK_CONVERT';
       entries.push({
         date: b.date, ts: b.createdAt || 0,
-        type: b.mode === 'STOCK_CONVERT' ? '🔄 Stock Convert' : '🏷️ Barcoding',
-        detail: `${b.designName} (${b.firmCode})`, qtyText: `-${b.qty}`, color: '#1d4ed8'
+        type: isConv ? '🔄 Dukan Convert' : '🏷️ Barcoding',
+        detail: isConv ? b.designName : `${b.designName}${b.firmCode ? ' (' + b.firmCode + ')' : ''}`,
+        qtyText: `-${b.qty}`, color: '#1d4ed8'
       });
     }
   });
@@ -177,7 +179,7 @@ async function renderDaybook() {
     ? await dbGetByIndex('challans', 'date', targetDate)
     : (await dbGetAll('challans')).filter((x) => daybookState.showAll || x.date === targetDate);
 
-  let sumBaithak = 0, sumJWOut = 0, sumJWIn = 0, sumBarcoded = 0, sumChallanPcs = 0, sumChallanAmt = 0;
+  let sumBaithak = 0, sumJWOut = 0, sumJWIn = 0, sumConverted = 0, sumBarcoded = 0, sumChallanPcs = 0, sumChallanAmt = 0;
   const rows = [];
 
   jwLedger.forEach((l) => {
@@ -195,12 +197,20 @@ async function renderDaybook() {
   });
 
   bcLogs.forEach((b) => {
-    sumBarcoded += b.qty;
+    const isConv = b.mode === 'STOCK_CONVERT';
+    if (isConv) sumConverted += b.qty;
+    else sumBarcoded += b.qty;
+
+    const srcTxt = b.fromConverted
+      ? `Converted: ${b.sourceName}`
+      : (b.sourceName === _DBK_POOL ? 'JW Pool' : b.sourceName);
+
     rows.push({
       date: b.date, ts: b.createdAt || 0,
-      mod: b.mode === 'STOCK_CONVERT' ? '🔄 Stock Convert' : '🏷️ Barcoding',
-      who: `${b.designName} (${b.firmCode})`,
-      detail: `From: ${b.sourceName === _DBK_POOL ? 'JW Pool' : b.sourceName}`, val: `${b.qty} Pcs`
+      mod: isConv ? '🔄 Stock Convert' : '🏷️ Challan Barcode',
+      who: isConv ? b.designName : `${b.designName}${b.firmCode ? ' (' + b.firmCode + ')' : ''}`,
+      detail: `From: ${srcTxt}`,
+      val: `${b.qty} Pcs`
     });
   });
 
@@ -249,7 +259,7 @@ async function renderDaybook() {
           <small>JW Out / Wapsi</small><br/><b>${sumJWOut} / +${sumJWIn}</b>
         </div>
         <div style="background:#fefce8; border:1px solid #fef08a; padding:8px; border-radius:8px; text-align:center;">
-          <small>Barcoded</small><br/><b>${sumBarcoded} Pcs</b>
+          <small>Convert / Barcode</small><br/><b>${sumConverted} / ${sumBarcoded} Pcs</b>
         </div>
         <div style="background:#fef2f2; border:1px solid #fecaca; padding:8px; border-radius:8px; text-align:center;">
           <small>Challan Sale</small><br/><b>${sumChallanPcs} Pcs (₹${sumChallanAmt.toLocaleString('en-IN')})</b>
