@@ -1,4 +1,6 @@
-// === SimpliTex Module 5 & 6 v5: Pro Challan & A5 Packing Slip (Toast/Modal + Last Rate Hint + Clean Layout + Multi-PC Guard) ===
+// === SimpliTex Module 5 & 6 v6: Pro Delivery Challan & A5 Packing Slip ===
+// Features: 1 Order -> Unlimited Partial Challans & Packing Slips (Quick Qty Grid + Barcode Scan),
+// Last Challan Rate Auto-Hint, Date Filter + Clickable List, Accidental Delete Guard.
 
 let challanState = {
   view: 'FORM',
@@ -7,6 +9,10 @@ let challanState = {
   loadedParty: '',
   partyOrders: [],
   allChallans: [],
+  readyList: [],
+  firmsList: [],
+  fromDate: '',
+  toDate: '',
   editId: null,
   origChallan: null,
   draft: null,
@@ -46,7 +52,20 @@ if (!window.stxComputeOrderStatus) {
       totalPending += pendingQty;
       return { name: it.name, unit: it.unit || 'Pcs', rate: it.rate, orderedQty: ordQty, sentQty: usedSent, pendingQty };
     });
-    return { orderNo: order.orderNo, totalOrdered, totalSent, totalPending, isComplete: (order.items || []).length > 0 && totalPending === 0, linkedChallansCount: linkedChallans.length, items };
+    const isForceClosed = !!order.forceClosed;
+    const isComplete = isForceClosed || ((order.items || []).length > 0 && totalPending === 0);
+    return {
+      orderNo: order.orderNo,
+      totalOrdered,
+      totalSent,
+      totalPending: isForceClosed ? 0 : totalPending,
+      rawPending: totalPending,
+      isForceClosed,
+      isComplete,
+      linkedChallansCount: linkedChallans.length,
+      linkedChallans,
+      items
+    };
   };
 }
 
@@ -106,43 +125,78 @@ async function renderChallanModule() {
 
   // === VIEW 1: SAVED CHALLANS LIST ===
   if (challanState.view === 'LIST') {
-    const challans = (await dbGetAll('challans')).sort((a, b) => b.id - a.id);
+    const allChallans = (await dbGetAll('challans')).sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.id - a.id));
     const firms = await dbGetAll('firms');
+
+    const filtered = allChallans.filter((c) => {
+      if (challanState.fromDate && (c.date || '') < challanState.fromDate) return false;
+      if (challanState.toDate && (c.date || '') > challanState.toDate) return false;
+      return true;
+    });
+
+    let sumPcs = 0, sumAmt = 0;
+    filtered.forEach((c) => {
+      sumPcs += Number(c.totalPcs) || 0;
+      sumAmt += Number(c.totalAmount) || 0;
+    });
 
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>📜 Saved Challans (${challans.length})</h2>
+          <h2>📜 Saved Challans (${filtered.length})</h2>
           <div>
             <button class="btn btn-dark btn-sm" onclick="challanState.view='FORM'; challanState.items=[]; challanState.linkedOrderNo=''; challanState.loadedParty=''; challanState.editId=null; challanState.origChallan=null; challanState.draft=null; challanState.autoChallanNo=null; renderChallanModule();">+ Naya Challan</button>
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
+
+        <div class="stx-filter-bar">
+          <div class="stx-f-item">
+            <label>From Date</label>
+            <input type="date" value="${esc(challanState.fromDate)}" onchange="challanState.fromDate=this.value; if(window._stxPagerState) delete window._stxPagerState['challanListPager']; renderChallanModule();" />
+          </div>
+          <div class="stx-f-item">
+            <label>To Date</label>
+            <input type="date" value="${esc(challanState.toDate)}" onchange="challanState.toDate=this.value; if(window._stxPagerState) delete window._stxPagerState['challanListPager']; renderChallanModule();" />
+          </div>
+          <button type="button" class="btn btn-light btn-sm" onclick="challanState.fromDate=''; challanState.toDate=''; if(window._stxPagerState) delete window._stxPagerState['challanListPager']; renderChallanModule();">Reset</button>
+        </div>
+
+        <div class="stx-summary-strip">
+          <div class="stx-summary-pill"><small>Total Challans</small><b>${filtered.length}</b></div>
+          <div class="stx-summary-pill"><small>Total Pcs</small><b style="color:#2563eb;">${sumPcs} Pcs</b></div>
+          <div class="stx-summary-pill"><small>Total Value</small><b style="color:#16a34a;">₹${sumAmt.toLocaleString('en-IN')}</b></div>
+        </div>
+
+        <div style="font-size:12px; color:#475569; margin-bottom:8px; font-weight:600;">
+          💡 Kisi bhi Challan row par <b>click karne par uska Form</b> khul jayega.
+        </div>
+
         <div id="challanListPager"></div>
       </div>
     `;
 
     mountPagedList({
       id: 'challanListPager',
-      items: challans,
+      items: filtered,
       perPage: 15,
-      placeholder: '🔍 Challan No., Party, City, Transport, Marka ya Saree search karein...',
+      placeholder: '🔍 Challan No., Order No., Party, City, Transport, Marka ya Saree search karein...',
       headHtml: '<tr><th>Challan #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Pcs / Amount</th><th>Action</th></tr>',
       getSearchText: (c) => {
         const f = firms.find((x) => x.id === Number(c.firmId));
         const itemTxt = (c.items || []).map((it) => it.designName).join(' ');
-        return `${c.challanNo} ${c.date} ${f ? f.shortCode : ''} ${c.partyName} ${c.partyCity} ${c.marka || ''} ${c.transport || ''} ${itemTxt}`;
+        return `${c.challanNo} ${c.orderNo || ''} ${c.date} ${f ? f.shortCode : ''} ${c.partyName} ${c.partyCity} ${c.marka || ''} ${c.transport || ''} ${itemTxt}`;
       },
       renderRow: (c) => {
         const f = firms.find((x) => x.id === Number(c.firmId));
         return `
-          <tr>
-            <td><b>#${esc(c.challanNo)}</b>${c.orderNo ? `<br/><small style="color:#64748b;">Ord #${esc(c.orderNo)}</small>` : ''}</td>
+          <tr class="stx-row-click" onclick="editChallanById(${c.id})">
+            <td><b>#${esc(c.challanNo)}</b>${c.orderNo ? `<br/><small style="color:#2563eb; font-weight:700;">Ord #${esc(c.orderNo)}</small>` : ''}</td>
             <td style="white-space:nowrap;">${esc(c.date)}</td>
             <td><b>${esc(f ? f.shortCode : '-')}</b></td>
             <td><b>${esc(c.partyName)}</b><br/><small style="color:#64748b;">${esc(c.partyCity || '')} | ${esc(c.transport || '')}</small></td>
             <td><b>${c.totalPcs} Pcs</b><br/><small style="color:#16a34a; font-weight:700;">₹${Number(c.totalAmount || 0).toLocaleString('en-IN')}</small></td>
-            <td style="white-space:nowrap;">
+            <td style="white-space:nowrap;" onclick="event.stopPropagation()">
               <button class="btn btn-dark btn-sm" title="Challan Print" onclick="printChallanById(${c.id})">🖨️ Bill</button>
               <button class="btn btn-success btn-sm" title="A5 Packing Slip" onclick="printA5PackingSlipById(${c.id})">🏷️ Slip</button>
               <button class="btn btn-light btn-sm" title="Edit" onclick="editChallanById(${c.id})">✏️</button>
@@ -168,6 +222,8 @@ async function renderChallanModule() {
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
   const ready = await dbGetAll('readyStock');
+  challanState.firmsList = firms;
+  challanState.readyList = ready;
 
   let totalChallansCount = 0;
   let nextChNo = 1;
@@ -185,9 +241,9 @@ async function renderChallanModule() {
     <div class="card">
       <div class="card-head">
         <h2>${isEdit ? `✏️ Edit Challan (#${esc(d.challanNo)})` : '5. Delivery Challan & A5 Packing Slip'}</h2>
-        <div>
-          ${isEdit ? `<button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Cancel Edit</button>` : ''}
-          <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['challanListPager']; challanState.view='LIST'; renderChallanModule();">
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          ${isEdit ? `<button class="btn btn-dark btn-sm" onclick="printChallanById(${challanState.editId})">🖨️ Bill</button> <button class="btn btn-success btn-sm" onclick="printA5PackingSlipById(${challanState.editId})">🏷️ Slip</button> <button class="btn btn-danger btn-sm" onclick="reverseChallanById(${challanState.editId})">🗑️ Delete</button> <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back</button>` : ''}
+          <button class="btn btn-primary btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['challanListPager']; challanState.view='LIST'; renderChallanModule();">
             📜 Saved Challans (${totalChallansCount})
           </button>
         </div>
@@ -214,7 +270,7 @@ async function renderChallanModule() {
           </datalist>
         </div>
         <div>
-          <label>Pending Order Link (Sirf Adhure Orders)</label>
+          <label>Pending Order Link (Partial Dispatch)</label>
           <select id="chOrderSelect" onchange="onChallanOrderSelectChange()">
             <option value="">-- Pehle Party Chunein --</option>
           </select>
@@ -230,17 +286,17 @@ async function renderChallanModule() {
 
     <div class="card">
       <div class="card-head">
-        <h2>📦 Saree Scan & Billing Items</h2>
+        <h2>📦 Saree Scan ya Manual Add</h2>
         <label style="margin:0; font-size:12px; color:#1e3a8a; display:flex; align-items:center; gap:5px; cursor:pointer;">
           <input type="checkbox" id="chAutoScan1" style="width:auto;" /> Scan pe 1 Pcs Auto-Add
         </label>
       </div>
 
-      <div style="background:#f8fafc; border:1px solid #cbd5e1; padding:12px; border-radius:10px; margin-bottom:12px;">
+      <div class="stx-subpanel">
         <div class="grid-2" style="align-items:start;">
           <div>
             <label>Barcode Scan / Saree Name *</label>
-            <input id="chScanInput" list="chReadyList" placeholder="Scan e.g. RASHMIKA KT" data-custom-enter="1"
+            <input id="chScanInput" list="chReadyList" placeholder="Scan e.g. 1050 KT" data-custom-enter="1"
                    onkeydown="if(event.key==='Enter'){ event.preventDefault(); handleChallanScan(); }" />
             <datalist id="chReadyList">
               ${ready.map((r) => `<option value="${esc(r.barcodeVal)}">${esc(r.designName)} (${esc(r.firmCode)}) - Stock: ${r.qty}</option>`).join('')}
@@ -254,10 +310,10 @@ async function renderChallanModule() {
           </div>
           <div>
             <label style="visibility:hidden;">.</label>
-            <button type="button" class="btn btn-dark" style="height:40px; width:100%;" onclick="addChallanRow()">+ Add Saree</button>
+            <button type="button" class="btn btn-dark" style="height:42px; width:100%;" onclick="addChallanRow()">+ Add Saree</button>
           </div>
         </div>
-        <div id="chScanHint" style="font-size:12px; font-weight:700; color:#16a34a; margin-top:7px; min-height:16px;"></div>
+        <div id="chScanHint" class="stx-field-hint" style="margin-top:6px;"></div>
       </div>
 
       <div style="overflow-x:auto;">
@@ -267,9 +323,9 @@ async function renderChallanModule() {
         </table>
       </div>
 
-      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; margin-top:14px;">
+      <div class="stx-subpanel" style="margin-top:14px;">
         <div class="grid-2" style="align-items:start;">
-          <div style="font-size:16px; font-weight:800; padding-top:8px;">
+          <div style="font-size:16px; font-weight:800; padding-top:10px;">
             Total Pcs: <span id="chTotalPcs" style="color:#2563eb;">0</span> &nbsp;|&nbsp;
             Amount: <span id="chTotalAmt" style="color:#16a34a;">₹0</span>
           </div>
@@ -279,7 +335,7 @@ async function renderChallanModule() {
           </div>
         </div>
         <button type="button" class="btn btn-success primary-save-btn" style="margin-top:12px; width:100%; height:44px; font-size:14px;" onclick="saveChallanForm()">
-          ${isEdit ? '✅ Update Challan & Sync Stock (Ctrl+S)' : '✅ Save Challan & Print Options (Ctrl+S)'}
+          ${isEdit ? '✅ Update Challan & Sync Stock (Ctrl+S)' : '✅ Save Challan & Print Bill / Slip (Ctrl+S)'}
         </button>
       </div>
     </div>
@@ -291,6 +347,7 @@ async function renderChallanModule() {
     if (ordSel && d.orderNo) {
       ordSel.value = String(d.orderNo);
       challanState.linkedOrderNo = String(d.orderNo);
+      renderChallanOrderTracker();
     }
   }
 
@@ -369,8 +426,11 @@ async function onChallanPartyChange(preserveFields) {
         `<option value="${o.orderNo}">Order #${o.orderNo} (${o.date}) — ${st.totalPending} Pcs Baki</option>`
       ).join('');
     if (!preserveFields) {
-      ordSel.value = String(pendingOrders[0].order.orderNo);
-      challanState.linkedOrderNo = String(pendingOrders[0].order.orderNo);
+      const firstOrd = pendingOrders[0].order;
+      ordSel.value = String(firstOrd.orderNo);
+      challanState.linkedOrderNo = String(firstOrd.orderNo);
+      if (firstOrd.marka && !document.getElementById('chMarka').value.trim()) document.getElementById('chMarka').value = firstOrd.marka;
+      if (firstOrd.transport && !document.getElementById('chTransport').value.trim()) document.getElementById('chTransport').value = firstOrd.transport;
     }
   } else if (partyOrders.length) {
     ordSel.innerHTML = '<option value="">-- Saare Orders Complete Ho Chuke Hain ✅ --</option>';
@@ -386,6 +446,11 @@ async function onChallanPartyChange(preserveFields) {
 function onChallanOrderSelectChange() {
   const ordSel = document.getElementById('chOrderSelect');
   challanState.linkedOrderNo = ordSel ? ordSel.value : '';
+  const ord = (challanState.partyOrders || []).find((o) => String(o.orderNo) === String(challanState.linkedOrderNo));
+  if (ord) {
+    if (ord.marka && !document.getElementById('chMarka').value.trim()) document.getElementById('chMarka').value = ord.marka;
+    if (ord.transport && !document.getElementById('chTransport').value.trim()) document.getElementById('chTransport').value = ord.transport;
+  }
   renderChallanOrderTracker();
 }
 
@@ -433,7 +498,7 @@ function renderChallanOrderTracker() {
   if (!progress) {
     if ((challanState.partyOrders || []).length > 0) {
       host.innerHTML = `
-        <div style="background:#f0fdf4; border:1px solid #86efac; color:#15803d; padding:10px 12px; border-radius:8px; font-size:12.5px; font-weight:700;">
+        <div style="background:#f0fdf4; border:1px solid #86efac; color:#15803d; padding:10px 12px; border-radius:9px; font-size:12.5px; font-weight:700;">
           ✅ Is party ke saare (${challanState.partyOrders.length}) Order pure ho chuke hain!
         </div>
       `;
@@ -443,39 +508,126 @@ function renderChallanOrderTracker() {
     return;
   }
 
+  const firms = challanState.firmsList || [];
+  const activeFirmId = Number(document.getElementById('chFirmId')?.value);
+  const activeFirmObj = firms.find((f) => f.id === activeFirmId) || firms[0];
+  const defaultFirmCode = activeFirmObj ? activeFirmObj.shortCode : 'KT';
+  const readyList = challanState.readyList || [];
+
   const banner = progress.willCompleteNow
-    ? `<div style="background:#dcfce7; border:1px solid #4ade80; color:#15803d; padding:8px 10px; border-radius:6px; font-weight:800; font-size:12.5px; margin-bottom:8px;">
+    ? `<div style="background:#dcfce7; border:1px solid #4ade80; color:#15803d; padding:8px 11px; border-radius:8px; font-weight:800; font-size:12.5px; margin-bottom:10px;">
          🎉 Is Challan ko Save karte hi Order #${esc(progress.order.orderNo)} PURA HO JAYEGA!
        </div>`
-    : `<div style="font-size:12.5px; font-weight:700; color:#92400e; margin-bottom:6px;">
-         ⏳ Order #${esc(progress.order.orderNo)} Pending Hisab — Abhi Total <b>${progress.liveRemainingTotal} Pcs</b> Aur Bhejna Hai:
+    : `<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+         <div style="font-size:12.5px; font-weight:800; color:#92400e;">
+           📦 Order #${esc(progress.order.orderNo)} — Baki: <b>${progress.liveRemainingTotal} Pcs</b> (Jo aaj bhejna hai uske aage Qty daalein, baaki khali chhodein)
+         </div>
+         <button type="button" class="btn btn-dark btn-sm" onclick="addOrderDispatchItems()">⬇️ Entered Qty Challan Me Jodein</button>
        </div>`;
 
   host.innerHTML = `
-    <div style="background:#fffbeb; border:1px solid #fcd34d; padding:10px 12px; border-radius:8px;">
+    <div style="background:#fffbeb; border:1px solid #fcd34d; padding:12px; border-radius:11px;">
       ${banner}
       <div style="overflow-x:auto;">
         <table style="font-size:12px; margin-top:4px;">
           <thead>
-            <tr><th>Saree</th><th>Order</th><th>Pehle Bheja</th><th>Is Challan Me</th><th>Abhi Baki</th></tr>
+            <tr>
+              <th>Saree</th>
+              <th>Order / Gaya</th>
+              <th>Baki</th>
+              <th>Ready Stock</th>
+              <th>Rate (₹)</th>
+              <th>Firm</th>
+              <th style="width:95px;">Aaj Bhejna</th>
+            </tr>
           </thead>
           <tbody>
-            ${progress.liveItems.map((it) => `
-              <tr>
-                <td><b>${esc(it.name)}</b></td>
-                <td>${it.orderedQty}</td>
-                <td>${it.sentQty}</td>
-                <td>${it.inCartQty}</td>
-                <td>${it.livePendingQty === 0
-                  ? '<b style="color:#15803d;">0 (Pura ✅)</b>'
-                  : `<b style="color:#b45309;">${it.livePendingQty} Pcs</b>`}</td>
-              </tr>
-            `).join('')}
+            ${progress.liveItems.map((it, idx) => {
+              const stocks = readyList.filter((r) => String(r.designName || '').toUpperCase() === String(it.name || '').toUpperCase() && r.qty > 0);
+              const stockTxt = stocks.length ? stocks.map((s) => `${s.firmCode}:${s.qty}`).join(', ') : '0';
+              const bestFirm = stocks.length ? stocks[0].firmCode : defaultFirmCode;
+              const firmOpts = firms.length
+                ? firms.map((f) => `<option value="${esc(f.shortCode)}" ${f.shortCode === bestFirm ? 'selected' : ''}>${esc(f.shortCode)}</option>`).join('')
+                : `<option value="${esc(bestFirm)}">${esc(bestFirm)}</option>`;
+
+              return `
+                <tr>
+                  <td><b>${esc(it.name)}</b></td>
+                  <td>${it.orderedQty} / ${it.sentQty + it.inCartQty}</td>
+                  <td>${it.livePendingQty === 0 ? '<b style="color:#15803d;">0 ✅</b>' : `<b style="color:#b45309;">${it.livePendingQty}</b>`}</td>
+                  <td><small style="color:${stocks.length ? '#15803d' : '#64748b'}; font-weight:700;">${esc(stockTxt)}</small></td>
+                  <td><b>₹${it.rate}</b></td>
+                  <td>
+                    <select id="chOrdFirm_${idx}" style="height:32px; font-size:12px; padding:0 6px; min-width:64px;">
+                      ${firmOpts}
+                    </select>
+                  </td>
+                  <td>
+                    <input type="number" id="chOrdQty_${idx}" min="0" placeholder="0"
+                           data-custom-enter="1"
+                           onkeydown="if(event.key==='Enter'){ event.preventDefault(); addOrderDispatchItems(); }"
+                           style="height:32px; font-size:12.5px; padding:0 8px;"
+                           ${it.livePendingQty <= 0 ? 'disabled' : ''} />
+                  </td>
+                </tr>
+              `;
+            }).join('')}
           </tbody>
         </table>
       </div>
+      <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+        <button type="button" class="btn btn-dark btn-sm" onclick="addOrderDispatchItems()">⬇️ Entered Qty Challan Me Jodein</button>
+      </div>
     </div>
   `;
+}
+
+function addOrderDispatchItems() {
+  const progress = getLinkedOrderLiveProgress();
+  if (!progress) return;
+
+  let addedCount = 0;
+  let totalAddedPcs = 0;
+
+  for (let idx = 0; idx < progress.liveItems.length; idx++) {
+    const it = progress.liveItems[idx];
+    const qEl = document.getElementById(`chOrdQty_${idx}`);
+    const fEl = document.getElementById(`chOrdFirm_${idx}`);
+    if (!qEl) continue;
+
+    const qty = parseInt(qEl.value, 10);
+    if (!qty || qty <= 0) continue;
+
+    if (qty > it.livePendingQty) {
+      if (!confirm(`⚠️ "${it.name}" ke sirf ${it.livePendingQty} Pcs baki hain. Phir bhi ${qty} Pcs add karein?`)) {
+        continue;
+      }
+    }
+
+    const designName = String(it.name || '').trim().toUpperCase();
+    const firmCode = (fEl ? fEl.value : 'KT').trim().toUpperCase();
+    const rate = Number(it.rate) || 0;
+    const skuKey = `${designName}__${firmCode}`;
+
+    const existing = challanState.items.find((x) => x.skuKey === skuKey && x.rate === rate);
+    if (existing) {
+      existing.qty += qty;
+      existing.amount = existing.qty * existing.rate;
+    } else {
+      challanState.items.push({ skuKey, designName, firmCode, qty, rate, amount: qty * rate });
+    }
+
+    qEl.value = '';
+    addedCount++;
+    totalAddedPcs += qty;
+  }
+
+  if (!addedCount) {
+    return chNotify('Kam se kam ek Saree ke aage Aaj Bhejna Qty daalein!', 'warn');
+  }
+
+  renderChallanItemsTable();
+  chNotify(`✅ ${totalAddedPcs} Pcs (${addedCount} designs) Challan mein jud gayi!`, 'success');
 }
 
 async function findRateFromOrder(partyName, designName) {
@@ -503,7 +655,6 @@ async function findRateFromOrder(partyName, designName) {
     if (hit) return { rate: hit.rate, orderNo: ord.orderNo, source: 'PAST_ORDER' };
   }
 
-  // Fallback: Pichle Challan se Last Rate dhoondhein
   const pastCh = (challanState.allChallans || []).slice().sort((a, b) => b.id - a.id);
   for (const ch of pastCh) {
     const hit = (ch.items || []).find((it) => String(it.designName || '').toUpperCase() === designName.toUpperCase());
@@ -545,7 +696,7 @@ async function handleChallanScan() {
 
   if (orderItem && orderItem.livePendingQty <= 0) {
     hint.style.color = '#dc2626';
-    hint.textContent = `⚠️ WARNING: "${designName}" ka Order #${progress.order.orderNo} poora ho chuka hai! (${orderItem.orderedQty}/${orderItem.orderedQty}) | Ready Stock: ${availQty} Pcs`;
+    hint.textContent = `⚠️ WARNING: "${designName}" ka Order #${progress.order.orderNo} poora ho chuka hai! | Ready Stock: ${availQty} Pcs`;
   } else if (orderItem) {
     hint.style.color = '#16a34a';
     hint.textContent = `✓ ${designName} (${firmCode}) | Stock: ${availQty} Pcs | Order #${progress.order.orderNo} Rate: ₹${rateInfo ? rateInfo.rate : orderItem.rate} | Baki: ${orderItem.livePendingQty} Pcs`;
@@ -653,7 +804,7 @@ function renderChallanItemsTable() {
         <td><button type="button" class="btn btn-danger btn-sm" onclick="removeChallanRow(${i})">X</button></td>
       </tr>
     `;
-  }).join('') || '<tr><td colspan="7" style="color:#64748b;">Scan karke saree add karein...</td></tr>';
+  }).join('') || '<tr><td colspan="7" style="color:#64748b;">Upar Order Grid se Qty daalein ya Barcode scan karein...</td></tr>';
 
   document.getElementById('chTotalPcs').textContent = totalPcs;
   document.getElementById('chTotalAmt').textContent = '₹' + totalAmt.toLocaleString('en-IN');
@@ -736,7 +887,7 @@ async function saveChallanForm() {
         const st = window.stxComputeOrderStatus(linkedOrd, partyChallans);
         orderHtml = st.isComplete
           ? `<div style="background:#dcfce7; color:#15803d; padding:8px 10px; border-radius:8px; font-weight:700; margin-top:8px;">🎉 Order #${esc(orderNo)} ab PURA HO CHUKA HAI!</div>`
-          : `<div style="background:#fef3c7; color:#92400e; padding:8px 10px; border-radius:8px; font-weight:700; margin-top:8px;">⏳ Order #${esc(orderNo)} me abhi ${st.totalPending} Pcs baki hain.</div>`;
+          : `<div style="background:#fef3c7; color:#92400e; padding:8px 10px; border-radius:8px; font-weight:700; margin-top:8px;">⏳ Order #${esc(orderNo)} me abhi <b>${st.totalPending} Pcs</b> aur baki hain (agli baar bhejne ke liye).</div>`;
       }
     }
 
@@ -851,6 +1002,8 @@ async function printChallanById(id) {
 function renderAndPrintPackingSlips(c, nagCount) {
   setPrintPageStyle('@media print { @page { size: A5 portrait; margin: 6mm; } body { margin: 0; } }');
 
+  const itemsLine = (c.items || []).map((it) => `${esc(it.designName)}: <b>${it.qty}</b>`).join(' &nbsp;|&nbsp; ');
+
   let slipsHtml = '';
   for (let n = 1; n <= nagCount; n++) {
     slipsHtml += `
@@ -862,25 +1015,29 @@ function renderAndPrintPackingSlips(c, nagCount) {
           <div style="font-size:15px; font-weight:700;">Date: ${esc(c.date)}</div>
         </div>
 
-        <div style="text-align:center; padding:14px 0; border-bottom:2px dashed #000;">
-          <div style="font-size:14px; font-weight:700; color:#444;">DESTINATION / CITY</div>
-          <div style="font-size:44px; font-weight:900; letter-spacing:1px; margin-top:4px;">${esc(c.partyCity)}</div>
+        <div style="text-align:center; padding:12px 0; border-bottom:2px dashed #000;">
+          <div style="font-size:13px; font-weight:700; color:#444;">DESTINATION / CITY</div>
+          <div style="font-size:40px; font-weight:900; letter-spacing:1px; margin-top:4px;">${esc(c.partyCity)}</div>
         </div>
 
-        <div style="text-align:center; padding:14px 0; border-bottom:2px dashed #000;">
-          <div style="font-size:14px; font-weight:700; color:#444;">TRANSPORT</div>
-          <div style="font-size:36px; font-weight:900; margin-top:4px;">${esc(c.transport || 'BY HAND')}</div>
+        <div style="text-align:center; padding:12px 0; border-bottom:2px dashed #000;">
+          <div style="font-size:13px; font-weight:700; color:#444;">TRANSPORT</div>
+          <div style="font-size:32px; font-weight:900; margin-top:4px;">${esc(c.transport || 'BY HAND')}</div>
         </div>
 
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; text-align:center; padding:12px 0;">
-          <div style="border:2px solid #000; padding:10px;">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; text-align:center; padding:10px 0;">
+          <div style="border:2px solid #000; padding:8px;">
             <div style="font-size:12px; font-weight:700;">CHALLAN NO.</div>
-            <div style="font-size:30px; font-weight:900;">#${esc(c.challanNo)}</div>
+            <div style="font-size:28px; font-weight:900;">#${esc(c.challanNo)}</div>
           </div>
-          <div style="border:2px solid #000; padding:10px;">
+          <div style="border:2px solid #000; padding:8px;">
             <div style="font-size:12px; font-weight:700;">MARKA</div>
-            <div style="font-size:28px; font-weight:900;">${esc(c.marka || '-')}</div>
+            <div style="font-size:26px; font-weight:900;">${esc(c.marka || '-')}</div>
           </div>
+        </div>
+
+        <div style="border:1.5px solid #000; padding:7px 10px; font-size:12.5px; text-align:center; line-height:1.45;">
+          ${itemsLine}
         </div>
 
         <div style="display:flex; justify-content:space-between; align-items:center; border-top:3px solid #000; padding-top:10px; font-size:20px; font-weight:900;">
@@ -940,12 +1097,30 @@ async function reverseChallanById(id) {
   try {
     const c = await dbGet('challans', id);
     if (!c) return;
-    if (!confirm(`Challan #${c.challanNo} Delete karke Stock dobara calculate karna hai?`)) return;
 
-    await dbDelete('challans', id);
-    if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
-    if (typeof refreshDashboard === 'function') await refreshDashboard();
-    chNotify(`Challan #${c.challanNo} delete ho gaya`, 'info');
-    renderChallanModule();
+    const doDelete = async () => {
+      await dbDelete('challans', id);
+      if (challanState.editId === id) {
+        challanState.editId = null;
+        challanState.origChallan = null;
+        challanState.draft = null;
+        challanState.items = [];
+        challanState.view = 'LIST';
+      }
+      if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
+      if (typeof refreshDashboard === 'function') await refreshDashboard();
+      chNotify(`Challan #${c.challanNo} delete ho gaya`, 'info');
+      renderChallanModule();
+    };
+
+    if (typeof window.stxConfirmDelete === 'function') {
+      window.stxConfirmDelete({
+        title: '⚠️ Challan Delete Karein?',
+        detailsHtml: `<b>Challan #:</b> ${esc(c.challanNo)}${c.orderNo ? ` (Order #${esc(c.orderNo)})` : ''}<br/><b>Party:</b> ${esc(c.partyName)} (${esc(c.partyCity || '-')})<br/><b>Date:</b> ${esc(c.date)} &nbsp;|&nbsp; <b>Total:</b> ${c.totalPcs} Pcs (₹${Number(c.totalAmount || 0).toLocaleString('en-IN')})`,
+        onConfirm: doDelete
+      });
+    } else if (confirm(`Challan #${c.challanNo} Delete karke Stock dobara calculate karna hai?`)) {
+      await doDelete();
+    }
   } catch (err) { chNotify('Delete Error: ' + err.message, 'error'); }
 }
