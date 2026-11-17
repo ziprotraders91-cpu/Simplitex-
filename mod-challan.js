@@ -1,4 +1,4 @@
-// === SimpliTex Module 5 & 6 v4: Challan & A5 Packing Slip (Edit + Auto Stock Engine + Aligned + Pending Tracker + Multi-PC Guard) ===
+// === SimpliTex Module 5 & 6 v5: Pro Challan & A5 Packing Slip (Toast/Modal + Last Rate Hint + Clean Layout + Multi-PC Guard) ===
 
 let challanState = {
   view: 'FORM',
@@ -12,6 +12,11 @@ let challanState = {
   draft: null,
   autoChallanNo: null
 };
+
+function chNotify(msg, type = 'info') {
+  if (typeof window.stxToast === 'function') window.stxToast(msg, type);
+  else alert(msg);
+}
 
 if (!window.stxComputeOrderStatus) {
   window.stxComputeOrderStatus = function (order, allChallans) {
@@ -132,16 +137,16 @@ async function renderChallanModule() {
         const f = firms.find((x) => x.id === Number(c.firmId));
         return `
           <tr>
-            <td><b>#${esc(c.challanNo)}</b>${c.orderNo ? `<br/><small style="color:#6b7280;">Ord #${esc(c.orderNo)}</small>` : ''}</td>
+            <td><b>#${esc(c.challanNo)}</b>${c.orderNo ? `<br/><small style="color:#64748b;">Ord #${esc(c.orderNo)}</small>` : ''}</td>
             <td style="white-space:nowrap;">${esc(c.date)}</td>
             <td><b>${esc(f ? f.shortCode : '-')}</b></td>
-            <td><b>${esc(c.partyName)}</b><br/><small>${esc(c.partyCity || '')} | ${esc(c.transport || '')}</small></td>
-            <td><b>${c.totalPcs} Pcs</b><br/><small>₹${Number(c.totalAmount || 0).toLocaleString('en-IN')}</small></td>
+            <td><b>${esc(c.partyName)}</b><br/><small style="color:#64748b;">${esc(c.partyCity || '')} | ${esc(c.transport || '')}</small></td>
+            <td><b>${c.totalPcs} Pcs</b><br/><small style="color:#16a34a; font-weight:700;">₹${Number(c.totalAmount || 0).toLocaleString('en-IN')}</small></td>
             <td style="white-space:nowrap;">
-              <button class="btn btn-dark btn-sm" onclick="printChallanById(${c.id})">🖨️ Challan</button>
-              <button class="btn btn-success btn-sm" onclick="printA5PackingSlipById(${c.id})">🏷️ Slip</button>
-              <button class="btn btn-light btn-sm" onclick="editChallanById(${c.id})">✏️ Edit</button>
-              <button class="btn btn-danger btn-sm" onclick="reverseChallanById(${c.id})">↩️ Del</button>
+              <button class="btn btn-dark btn-sm" title="Challan Print" onclick="printChallanById(${c.id})">🖨️ Bill</button>
+              <button class="btn btn-success btn-sm" title="A5 Packing Slip" onclick="printA5PackingSlipById(${c.id})">🏷️ Slip</button>
+              <button class="btn btn-light btn-sm" title="Edit" onclick="editChallanById(${c.id})">✏️</button>
+              <button class="btn btn-danger btn-sm" title="Delete" onclick="reverseChallanById(${c.id})">🗑️</button>
             </td>
           </tr>
         `;
@@ -179,7 +184,7 @@ async function renderChallanModule() {
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
-        <h2>${isEdit ? `✏️ Edit Challan (#${esc(d.challanNo)})` : '5. Challan (Parcel ke Andar) & A5 Packing Slip'}</h2>
+        <h2>${isEdit ? `✏️ Edit Challan (#${esc(d.challanNo)})` : '5. Delivery Challan & A5 Packing Slip'}</h2>
         <div>
           ${isEdit ? `<button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Cancel Edit</button>` : ''}
           <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['challanListPager']; challanState.view='LIST'; renderChallanModule();">
@@ -188,9 +193,13 @@ async function renderChallanModule() {
         </div>
       </div>
 
+      ${!firms.length ? `<div style="background:#fef2f2; color:#b91c1c; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px; font-weight:600;">
+        ⚠️ Pehle <b>⚙️ Settings</b> me apni Firm add karein!
+      </div>` : ''}
+
       <div class="grid-2" style="align-items:start;">
         <div>
-          <label>Firm Chunein *</label>
+          <label>Firm *</label>
           <select id="chFirmId">
             ${firms.map((f) => `<option value="${f.id}" ${d && Number(d.firmId) === f.id ? 'selected' : ''}>${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
           </select>
@@ -216,20 +225,18 @@ async function renderChallanModule() {
         <div style="grid-column: 1 / -1;"><label>Transport</label><input id="chTransport" value="${d ? esc(d.transport) : ''}" placeholder="e.g. VRL" /></div>
       </div>
 
-      <!-- Live Pending Order Tracker Box -->
       <div id="chOrderTracker" style="margin-top:12px;"></div>
+    </div>
 
-      <!-- Fast Barcode Scan Box -->
-      <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:8px; margin:14px 0;">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-          <span style="font-size:12px; font-weight:700; color:#1e3a8a;">
-            Barcode Scan Karein ya Saree Chunein (Enter = Aage | Khali me Backspace = Piche):
-          </span>
-          <label style="margin:0; font-size:12px; color:#1e3a8a; display:flex; align-items:center; gap:4px; cursor:pointer;">
-            <input type="checkbox" id="chAutoScan1" style="width:auto;" /> Scan pe 1 Pcs Auto-Add
-          </label>
-        </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>📦 Saree Scan & Billing Items</h2>
+        <label style="margin:0; font-size:12px; color:#1e3a8a; display:flex; align-items:center; gap:5px; cursor:pointer;">
+          <input type="checkbox" id="chAutoScan1" style="width:auto;" /> Scan pe 1 Pcs Auto-Add
+        </label>
+      </div>
 
+      <div style="background:#f8fafc; border:1px solid #cbd5e1; padding:12px; border-radius:10px; margin-bottom:12px;">
         <div class="grid-2" style="align-items:start;">
           <div>
             <label>Barcode Scan / Saree Name *</label>
@@ -250,7 +257,7 @@ async function renderChallanModule() {
             <button type="button" class="btn btn-dark" style="height:40px; width:100%;" onclick="addChallanRow()">+ Add Saree</button>
           </div>
         </div>
-        <div id="chScanHint" style="font-size:12px; color:#15803d; margin-top:6px;"></div>
+        <div id="chScanHint" style="font-size:12px; font-weight:700; color:#16a34a; margin-top:7px; min-height:16px;"></div>
       </div>
 
       <div style="overflow-x:auto;">
@@ -260,20 +267,21 @@ async function renderChallanModule() {
         </table>
       </div>
 
-      <div class="grid-2" style="margin-top:12px; align-items:start;">
-        <div style="font-size:16px; font-weight:800; padding:12px 0;">
-          Total Pcs: <span id="chTotalPcs" style="color:#1d4ed8;">0</span> &nbsp;|&nbsp;
-          Amount: <span id="chTotalAmt" style="color:#15803d;">₹0</span>
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; margin-top:14px;">
+        <div class="grid-2" style="align-items:start;">
+          <div style="font-size:16px; font-weight:800; padding-top:8px;">
+            Total Pcs: <span id="chTotalPcs" style="color:#2563eb;">0</span> &nbsp;|&nbsp;
+            Amount: <span id="chTotalAmt" style="color:#16a34a;">₹0</span>
+          </div>
+          <div>
+            <label>Remarks (Optional)</label>
+            <input id="chRemarks" value="${d ? esc(d.remarks) : ''}" placeholder="Remarks..." />
+          </div>
         </div>
-        <div>
-          <label>Remarks (Optional)</label>
-          <input id="chRemarks" value="${d ? esc(d.remarks) : ''}" placeholder="Remarks..." />
-        </div>
+        <button type="button" class="btn btn-success primary-save-btn" style="margin-top:12px; width:100%; height:44px; font-size:14px;" onclick="saveChallanForm()">
+          ${isEdit ? '✅ Update Challan & Sync Stock (Ctrl+S)' : '✅ Save Challan & Print Options (Ctrl+S)'}
+        </button>
       </div>
-
-      <button type="button" class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveChallanForm()">
-        ${isEdit ? '✅ Update Challan & Sync Stock (Ctrl+S)' : '✅ Save Challan & Print / A5 Packing Slip (Ctrl+S)'}
-      </button>
     </div>
   `;
 
@@ -338,14 +346,13 @@ async function onChallanPartyChange(preserveFields) {
     ? await dbGetByIndex('challans', 'partyName', partyName)
     : (await dbGetAll('challans')).filter((c) => (c.partyName || '').toUpperCase() === partyName);
 
-  // Edit mode me current challan ko exclude karein taaki double-count na ho
   const otherChallans = challanState.editId
     ? partyChallansRaw.filter((x) => x.id !== challanState.editId)
     : partyChallansRaw;
 
   const partyOrders = partyOrdersRaw.sort((a, b) => b.id - a.id);
   challanState.partyOrders = partyOrders;
-  challanState.allChallans = otherChallans;
+  challanState.allChallans = otherChallans.sort((a, b) => b.id - a.id);
 
   const pendingOrders = [];
   partyOrders.forEach((o) => {
@@ -427,7 +434,7 @@ function renderChallanOrderTracker() {
     if ((challanState.partyOrders || []).length > 0) {
       host.innerHTML = `
         <div style="background:#f0fdf4; border:1px solid #86efac; color:#15803d; padding:10px 12px; border-radius:8px; font-size:12.5px; font-weight:700;">
-          ✅ Is party ke saare (${challanState.partyOrders.length}) Order pure ho chuke hain! (Complete orders dropdown se hata diye gaye hain)
+          ✅ Is party ke saare (${challanState.partyOrders.length}) Order pure ho chuke hain!
         </div>
       `;
     } else {
@@ -488,12 +495,21 @@ async function findRateFromOrder(partyName, designName) {
     const exactOrder = orders.find((o) => String(o.orderNo) === String(linkedNo));
     if (exactOrder) {
       const hit = exactOrder.items.find((it) => it.name.toUpperCase() === designName.toUpperCase());
-      if (hit) return { rate: hit.rate, orderNo: exactOrder.orderNo, fromLinked: true };
+      if (hit) return { rate: hit.rate, orderNo: exactOrder.orderNo, source: 'ORDER' };
     }
   }
   for (const ord of orders) {
     const hit = ord.items.find((it) => it.name.toUpperCase() === designName.toUpperCase());
-    if (hit) return { rate: hit.rate, orderNo: ord.orderNo, fromLinked: false };
+    if (hit) return { rate: hit.rate, orderNo: ord.orderNo, source: 'PAST_ORDER' };
+  }
+
+  // Fallback: Pichle Challan se Last Rate dhoondhein
+  const pastCh = (challanState.allChallans || []).slice().sort((a, b) => b.id - a.id);
+  for (const ch of pastCh) {
+    const hit = (ch.items || []).find((it) => String(it.designName || '').toUpperCase() === designName.toUpperCase());
+    if (hit && hit.rate !== undefined) {
+      return { rate: hit.rate, challanNo: ch.challanNo, date: ch.date, source: 'LAST_CHALLAN' };
+    }
   }
   return null;
 }
@@ -528,17 +544,20 @@ async function handleChallanScan() {
   if (rateInfo) document.getElementById('chItemRate').value = rateInfo.rate;
 
   if (orderItem && orderItem.livePendingQty <= 0) {
-    hint.style.color = '#b91c1c';
-    hint.textContent = `⚠️ WARNING: "${designName}" ka Order #${progress.order.orderNo} poora ho chuka hai! (${orderItem.orderedQty}/${orderItem.orderedQty} bhej chuke ho) | Ready Stock: ${availQty} Pcs`;
+    hint.style.color = '#dc2626';
+    hint.textContent = `⚠️ WARNING: "${designName}" ka Order #${progress.order.orderNo} poora ho chuka hai! (${orderItem.orderedQty}/${orderItem.orderedQty}) | Ready Stock: ${availQty} Pcs`;
   } else if (orderItem) {
-    hint.style.color = '#15803d';
-    hint.textContent = `✓ ${designName} (${firmCode}) | Ready Stock: ${availQty} Pcs | Order #${progress.order.orderNo} Rate: ₹${rateInfo ? rateInfo.rate : orderItem.rate} | Baki: ${orderItem.livePendingQty} Pcs`;
-  } else if (rateInfo) {
-    hint.style.color = '#15803d';
-    hint.textContent = `✓ ${designName} (${firmCode}) | Ready Stock: ${availQty} Pcs | Purane Order #${rateInfo.orderNo} se Rate: ₹${rateInfo.rate}`;
+    hint.style.color = '#16a34a';
+    hint.textContent = `✓ ${designName} (${firmCode}) | Stock: ${availQty} Pcs | Order #${progress.order.orderNo} Rate: ₹${rateInfo ? rateInfo.rate : orderItem.rate} | Baki: ${orderItem.livePendingQty} Pcs`;
+  } else if (rateInfo && rateInfo.source === 'PAST_ORDER') {
+    hint.style.color = '#16a34a';
+    hint.textContent = `✓ ${designName} (${firmCode}) | Stock: ${availQty} Pcs | Purane Order #${rateInfo.orderNo} se Rate: ₹${rateInfo.rate}`;
+  } else if (rateInfo && rateInfo.source === 'LAST_CHALLAN') {
+    hint.style.color = '#2563eb';
+    hint.textContent = `💡 ${designName} (${firmCode}) | Stock: ${availQty} Pcs | Pichle Challan #${rateInfo.challanNo} (${rateInfo.date}) ka Rate: ₹${rateInfo.rate}`;
   } else {
-    hint.style.color = '#b45309';
-    hint.textContent = `✓ ${designName} (${firmCode}) | Ready Stock: ${availQty} Pcs | Order me rate nahi mila (khud daalein)`;
+    hint.style.color = '#d97706';
+    hint.textContent = `✓ ${designName} (${firmCode}) | Stock: ${availQty} Pcs | Rate nahi mila (khud daalein)`;
   }
 
   if (document.getElementById('chAutoScan1').checked && rateInfo) {
@@ -565,9 +584,9 @@ async function addChallanRow() {
   const qty = parseInt(qtyEl.value, 10);
   const rate = parseFloat(rateEl.value);
 
-  if (!raw) { scanEl.focus(); return alert('Barcode scan karein ya Design naam daalein!'); }
-  if (!qty || qty <= 0) { qtyEl.focus(); return alert('Sahi Qty daalein!'); }
-  if (isNaN(rate) || rate < 0) { rateEl.focus(); return alert('Sahi Rate daalein!'); }
+  if (!raw) { scanEl.focus(); return chNotify('Barcode scan karein ya Design naam daalein!', 'warn'); }
+  if (!qty || qty <= 0) { qtyEl.focus(); return chNotify('Sahi Qty daalein!', 'warn'); }
+  if (isNaN(rate) || rate < 0) { rateEl.focus(); return chNotify('Sahi Rate daalein!', 'warn'); }
 
   const readyAll = await dbGetAll('readyStock');
   let matched = readyAll.find((r) => r.barcodeVal.toUpperCase() === raw) || readyAll.find((r) => r.designName.toUpperCase() === raw);
@@ -583,7 +602,7 @@ async function addChallanRow() {
     const orderItem = progress.liveItems.find((it) => it.name.toUpperCase() === designName.toUpperCase());
     if (orderItem) {
       if (orderItem.livePendingQty <= 0) {
-        if (!confirm(`⚠️ WARNING: "${designName}" ka Order #${progress.order.orderNo} pehle hi poora ho chuka hai (0 Pcs baki)!\nPhir bhi is Challan me ${qty} Pcs add karein?`)) {
+        if (!confirm(`⚠️ WARNING: "${designName}" ka Order #${progress.order.orderNo} pehle hi poora ho chuka hai (0 Pcs baki)!\nPhir bhi ${qty} Pcs add karein?`)) {
           return;
         }
       } else if (qty > orderItem.livePendingQty) {
@@ -634,7 +653,7 @@ function renderChallanItemsTable() {
         <td><button type="button" class="btn btn-danger btn-sm" onclick="removeChallanRow(${i})">X</button></td>
       </tr>
     `;
-  }).join('') || '<tr><td colspan="7" style="color:#6b7280;">Scan karke saree add karein...</td></tr>';
+  }).join('') || '<tr><td colspan="7" style="color:#64748b;">Scan karke saree add karein...</td></tr>';
 
   document.getElementById('chTotalPcs').textContent = totalPcs;
   document.getElementById('chTotalAmt').textContent = '₹' + totalAmt.toLocaleString('en-IN');
@@ -654,13 +673,12 @@ async function saveChallanForm() {
     const orderNo = document.getElementById('chOrderSelect').value || '';
     const remarks = document.getElementById('chRemarks').value.trim();
 
-    if (!firmId) return alert('Pehle Settings me Firm add karein!');
-    if (!partyName || !partyCity) return alert('Party Name aur City zaroori hai!');
-    if (!challanState.items.length) return alert('Kam se kam 1 Saree add karein!');
+    if (!firmId) return chNotify('Pehle Settings me Firm add karein!', 'warn');
+    if (!partyName || !partyCity) return chNotify('Party Name aur City zaroori hai!', 'warn');
+    if (!challanState.items.length) return chNotify('Kam se kam 1 Saree add karein!', 'warn');
 
     const isEdit = !!(challanState.editId && challanState.origChallan);
 
-    // Multi-PC Guard: Agar auto Challan No. kisi aur PC par use ho gaya ho toh fresh number lein
     if (!isEdit && challanState.autoChallanNo !== null && challanNo === challanState.autoChallanNo) {
       const existingSame = await dbGetByIndex('challans', 'challanNo', challanNo);
       if (existingSame && existingSame.length > 0) {
@@ -704,7 +722,7 @@ async function saveChallanForm() {
     if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
 
-    let orderMsg = '';
+    let orderHtml = '';
     if (orderNo) {
       const partyOrders = (typeof dbGetByIndex === 'function')
         ? await dbGetByIndex('orders', 'partyName', partyName)
@@ -716,22 +734,12 @@ async function saveChallanForm() {
       const linkedOrd = partyOrders.find((o) => String(o.orderNo) === String(orderNo));
       if (linkedOrd) {
         const st = window.stxComputeOrderStatus(linkedOrd, partyChallans);
-        if (st.isComplete) {
-          orderMsg = `\n🎉 Order #${orderNo} ab PURA HO CHUKA HAI! (Dropdown se hata diya gaya)\n`;
-        } else {
-          orderMsg = `\n⏳ Order #${orderNo} me abhi ${st.totalPending} Pcs bhejna baki hai.\n`;
-        }
+        orderHtml = st.isComplete
+          ? `<div style="background:#dcfce7; color:#15803d; padding:8px 10px; border-radius:8px; font-weight:700; margin-top:8px;">🎉 Order #${esc(orderNo)} ab PURA HO CHUKA HAI!</div>`
+          : `<div style="background:#fef3c7; color:#92400e; padding:8px 10px; border-radius:8px; font-weight:700; margin-top:8px;">⏳ Order #${esc(orderNo)} me abhi ${st.totalPending} Pcs baki hain.</div>`;
       }
     }
 
-    const choice = prompt(
-      `✅ Challan #${challanNo} ${isEdit ? 'Update' : 'Save'} ho gaya!` +
-      orderMsg +
-      `\n1 likhein -> Challan Print (Half-A4)\n` +
-      `2 likhein -> A5 Packing Slip Print\n` +
-      `(Cancel dabakar baad me Saved Challans se print karein)`,
-      '1'
-    );
     challanState.items = [];
     challanState.linkedOrderNo = '';
     challanState.loadedParty = '';
@@ -742,9 +750,24 @@ async function saveChallanForm() {
     if (isEdit) challanState.view = 'LIST';
     await renderChallanModule();
 
-    if (choice === '1') await printChallanById(chId);
-    else if (choice === '2') await printA5PackingSlipById(chId);
-  } catch (err) { alert('Challan Save Error: ' + err.message); }
+    if (typeof window.stxOpenModal === 'function') {
+      window.stxOpenModal({
+        title: `✅ Challan #${challanNo} ${isEdit ? 'Update' : 'Save'} Ho Gaya!`,
+        bodyHtml: `
+          <div style="font-size:14px;"><b>${esc(partyName)}</b> (${esc(partyCity)})</div>
+          <div style="margin-top:4px; font-weight:700; color:#0f172a;">Total: ${totalPcs} Pcs &nbsp;|&nbsp; ₹${totalAmount.toLocaleString('en-IN')}</div>
+          ${orderHtml}
+        `,
+        buttons: [
+          { label: '🖨️ Challan Print', className: 'btn btn-dark', onClick: () => { stxCloseModal(); printChallanById(chId); } },
+          { label: '🏷️ A5 Packing Slip', className: 'btn btn-success', onClick: () => { stxCloseModal(); printA5PackingSlipById(chId); } },
+          { label: 'Done', className: 'btn btn-light', onClick: () => stxCloseModal() }
+        ]
+      });
+    } else {
+      chNotify(`Challan #${challanNo} Save ho gaya!`, 'success');
+    }
+  } catch (err) { chNotify('Challan Save Error: ' + err.message, 'error'); }
 }
 
 // === PRINT 1: CHALLAN (Half-A4 / A5 Landscape) ===
@@ -825,13 +848,7 @@ async function printChallanById(id) {
 }
 
 // === PRINT 2: A5 PACKING SLIP (NO PARTY NAME!) ===
-async function printA5PackingSlipById(id) {
-  const c = await dbGet('challans', id);
-  if (!c) return;
-
-  const nagCount = parseInt(prompt('Is Challan ke kitne Parcel / Nag bane hain? (e.g. 1 ya 2)', '1'), 10);
-  if (!nagCount || nagCount <= 0) return;
-
+function renderAndPrintPackingSlips(c, nagCount) {
   setPrintPageStyle('@media print { @page { size: A5 portrait; margin: 6mm; } body { margin: 0; } }');
 
   let slipsHtml = '';
@@ -879,6 +896,46 @@ async function printA5PackingSlipById(id) {
   setTimeout(() => window.print(), 150);
 }
 
+async function printA5PackingSlipById(id) {
+  const c = await dbGet('challans', id);
+  if (!c) return;
+
+  if (typeof window.stxOpenModal === 'function') {
+    window.stxOpenModal({
+      title: `🏷️ A5 Packing Slip (Challan #${c.challanNo})`,
+      bodyHtml: `
+        <label>Is Challan ke kitne Parcel / Nag bane hain?</label>
+        <input type="number" id="stxSlipNagInput" min="1" value="1"
+               onkeydown="if(event.key==='Enter'){ event.preventDefault(); document.getElementById('stxPrintSlipBtn')?.click(); }" />
+      `,
+      buttons: [
+        { label: 'Cancel', className: 'btn btn-light', onClick: () => stxCloseModal() },
+        {
+          label: '🏷️ Print Packing Slip',
+          className: 'btn btn-success',
+          onClick: () => {
+            const nagCount = parseInt(document.getElementById('stxSlipNagInput')?.value, 10);
+            if (!nagCount || nagCount <= 0) return chNotify('Sahi Nag count daalein!', 'warn');
+            stxCloseModal();
+            renderAndPrintPackingSlips(c, nagCount);
+          }
+        }
+      ]
+    });
+    setTimeout(() => {
+      const inp = document.getElementById('stxSlipNagInput');
+      const btns = document.querySelectorAll('#stxModalActions button');
+      if (btns[1]) btns[1].id = 'stxPrintSlipBtn';
+      if (inp) { inp.focus(); inp.select(); }
+    }, 40);
+    return;
+  }
+
+  const nagCount = parseInt(prompt('Is Challan ke kitne Parcel / Nag bane hain?', '1'), 10);
+  if (!nagCount || nagCount <= 0) return;
+  renderAndPrintPackingSlips(c, nagCount);
+}
+
 async function reverseChallanById(id) {
   try {
     const c = await dbGet('challans', id);
@@ -888,6 +945,7 @@ async function reverseChallanById(id) {
     await dbDelete('challans', id);
     if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
+    chNotify(`Challan #${c.challanNo} delete ho gaya`, 'info');
     renderChallanModule();
-  } catch (err) { alert('Delete Error: ' + err.message); }
+  } catch (err) { chNotify('Delete Error: ' + err.message, 'error'); }
 }
