@@ -1,7 +1,7 @@
-// === SimpliTex Module 4: Barcoding, Design Master & Sticker Print (15-Row Pager + Aligned) ===
+// === SimpliTex Module 4 v2: Dual Barcoding (Manual + Stock Convert: Karigar -> Bikri Design) ===
 
 const _BC_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
-let bcState = { view: 'FORM' };
+let bcState = { view: 'FORM', convertRows: [] };
 
 function ensureJsBarcodeLoaded() {
   if (typeof window.JsBarcode === 'function') return Promise.resolve(true);
@@ -14,12 +14,23 @@ function ensureJsBarcodeLoaded() {
   });
 }
 
+function getKarigarDesignMap() {
+  try { return JSON.parse(localStorage.getItem('simplitex_karigar_design_map') || '{}'); } catch (_) { return {}; }
+}
+
+function saveKarigarDesignMap(sourceName, designName) {
+  if (!sourceName || sourceName === _BC_POOL || !designName) return;
+  const map = getKarigarDesignMap();
+  map[sourceName.toUpperCase()] = designName.toUpperCase();
+  localStorage.setItem('simplitex_karigar_design_map', JSON.stringify(map));
+}
+
 // Chained Tab & Esc Hooks
 const _prevTabHookBC = window.onTabChanged;
 window.onTabChanged = function (tabId) {
   if (_prevTabHookBC) _prevTabHookBC(tabId);
   if (tabId === 'tab-barcode') {
-    bcState.view = 'FORM';
+    if (bcState.view !== 'CONVERT') bcState.view = 'FORM';
     ensureJsBarcodeLoaded();
     renderBarcodeModule();
   }
@@ -29,7 +40,7 @@ const _prevEscHookBC = window.handleModuleEscape;
 window.handleModuleEscape = function () {
   if (_prevEscHookBC && _prevEscHookBC()) return true;
   const sec = document.querySelector('.tab-sec:not(.hidden)');
-  if (sec && sec.id === 'tab-barcode' && bcState.view !== 'FORM') {
+  if (sec && sec.id === 'tab-barcode' && (bcState.view === 'DESIGNS' || bcState.view === 'HISTORY')) {
     bcState.view = 'FORM';
     renderBarcodeModule();
     return true;
@@ -37,14 +48,37 @@ window.handleModuleEscape = function () {
   return false;
 };
 
+function getBarcodeTopNavHtml(designCount) {
+  const mStyle = (v) => bcState.view === v
+    ? 'background:#0b0d12; color:#fff; border:1px solid #0b0d12;'
+    : 'background:#f3f4f6; color:#111827; border:1px solid #d1d5db;';
+
+  return `
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+      <button type="button" class="btn btn-sm" style="${mStyle('FORM')}" onclick="bcState.view='FORM'; renderBarcodeModule();">
+        🏷️ Manual Barcoding (Purana)
+      </button>
+      <button type="button" class="btn btn-sm" style="${mStyle('CONVERT')}" onclick="bcState.view='CONVERT'; renderBarcodeModule();">
+        🔄 Stock Convert (Karigar → Design)
+      </button>
+      <button type="button" class="btn btn-sm" style="${mStyle('DESIGNS')}" onclick="if(window._stxPagerState) delete window._stxPagerState['bcDesignPager']; bcState.view='DESIGNS'; renderBarcodeModule();">
+        🎨 Designs (${designCount})
+      </button>
+      <button type="button" class="btn btn-sm" style="${mStyle('HISTORY')}" onclick="if(window._stxPagerState) delete window._stxPagerState['bcHistoryPager']; bcState.view='HISTORY'; renderBarcodeModule();">
+        📜 Record
+      </button>
+    </div>
+  `;
+}
+
 async function renderBarcodeModule() {
   await openDB();
   if (typeof ensureOrderPrintSetup === 'function') ensureOrderPrintSetup();
   const box = document.getElementById('tab-barcode');
+  const designs = await dbGetAll('designs');
 
   // === VIEW 1: DESIGN MASTER (Universal Search + 15-Row Pager) ===
   if (bcState.view === 'DESIGNS') {
-    const designs = await dbGetAll('designs');
     const ready = await dbGetAll('readyStock');
     const enriched = designs.map((d) => {
       const stList = ready.filter((r) => r.designName === d.designName && r.qty > 0);
@@ -60,9 +94,10 @@ async function renderBarcodeModule() {
           <h2>🎨 Design Master (${designs.length} Designs)</h2>
           <div>
             <button class="btn btn-dark btn-sm" onclick="addNewDesignPrompt()">+ Naya Design</button>
-            <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+            <button class="btn btn-light btn-sm" onclick="bcState.view='FORM'; renderBarcodeModule();">← Back (Esc)</button>
           </div>
         </div>
+        ${getBarcodeTopNavHtml(designs.length)}
         <div id="bcDesignPager"></div>
       </div>
     `;
@@ -96,9 +131,10 @@ async function renderBarcodeModule() {
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>📜 Barcoding Record (${logs.length})</h2>
-          <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
+          <h2>📜 Barcoding & Convert Record (${logs.length})</h2>
+          <button class="btn btn-light btn-sm" onclick="bcState.view='FORM'; renderBarcodeModule();">← Back (Esc)</button>
         </div>
+        ${getBarcodeTopNavHtml(designs.length)}
         <div id="bcHistoryPager"></div>
       </div>
     `;
@@ -107,12 +143,13 @@ async function renderBarcodeModule() {
       id: 'bcHistoryPager',
       items: logs,
       perPage: 15,
-      placeholder: '🔍 Date, Bunkar, Design ya Firm search karein...',
-      headHtml: '<tr><th>Date</th><th>Source</th><th>Design & Firm</th><th>Pcs</th><th>Action</th></tr>',
-      getSearchText: (l) => `${l.date} ${l.sourceName} ${l.designName} ${l.firmCode} ${l.specLine || ''}`,
+      placeholder: '🔍 Date, Karigar, Design ya Firm search karein...',
+      headHtml: '<tr><th>Date</th><th>Type</th><th>Karigar / Source</th><th>Bikri Design & Firm</th><th>Pcs</th><th>Action</th></tr>',
+      getSearchText: (l) => `${l.date} ${l.mode || ''} ${l.sourceName} ${l.designName} ${l.firmCode} ${l.specLine || ''}`,
       renderRow: (l) => `
         <tr>
           <td style="white-space:nowrap;">${esc(l.date)}</td>
+          <td><small>${l.mode === 'STOCK_CONVERT' ? '🔄 Convert' : '🏷️ Manual'}</small></td>
           <td>${esc(l.sourceName === _BC_POOL ? 'Job Work Pool' : l.sourceName)}</td>
           <td><b>${esc(l.designName)} ${esc(l.firmCode)}</b><br/><small>${esc(l.specLine || '')}</small></td>
           <td><b>${l.qty}</b></td>
@@ -122,25 +159,116 @@ async function renderBarcodeModule() {
           </td>
         </tr>
       `,
-      emptyHtml: '<tr><td colspan="5">Abhi koi Barcoding entry nahi hui</td></tr>'
+      emptyHtml: '<tr><td colspan="6">Abhi koi Barcoding entry nahi hui</td></tr>'
     });
     return;
   }
 
-  // === VIEW 3: MAIN BARCODING FORM (Aligned Boxes) ===
   const stocks = (await dbGetAll('bunkarStock')).filter((s) => s.qty > 0);
   const firms = await dbGetAll('firms');
-  const designs = await dbGetAll('designs');
 
+  // === VIEW 3 (NEW): STOCK CONVERT (KARIGAR NAME -> BIKRI DESIGN NAME + BATCH PRINT) ===
+  if (bcState.view === 'CONVERT') {
+    const totalConvertPcs = bcState.convertRows.reduce((s, r) => s + r.qty, 0);
+
+    box.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h2>🔄 Stock Convert (Karigar Saree → Bikri Design Name)</h2>
+        </div>
+        ${getBarcodeTopNavHtml(designs.length)}
+
+        ${!firms.length ? `<div style="background:#fef2f2; color:#b91c1c; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px;">
+          ⚠️ Pehle <b>⚙️ Settings</b> me Firm Code (KT / IF) add karein!
+        </div>` : ''}
+
+        <div class="grid-2" style="margin-bottom:12px;">
+          <div><label>Date *</label><input type="date" id="scDate" value="${todayISO()}" /></div>
+          <div>
+            <label>Firm Short Code * (KT / IF)</label>
+            <select id="scFirmCode">
+              ${firms.map((f) => `<option value="${esc(f.shortCode)}">${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
+            </select>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label>Sticker Print Size</label>
+            <select id="scPrintMode">
+              <option value="THERMAL">Thermal Roll (50mm x 25mm — 1 per label)</option>
+              <option value="A4_GRID">A4 Sticker Sheet (Grid)</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:8px; margin-bottom:12px;">
+          <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:8px;">
+            Karigar Saree ko Bikri Design Name me Badlein (e.g. FARHAN 10 Pcs → Design 1070):
+          </div>
+          <div class="grid-2">
+            <div>
+              <label>Karigar / Source Saree *</label>
+              <select id="scSource" onchange="onSCSourceChange()">
+                <option value="">-- Karigar / Pool Chunein --</option>
+                ${stocks.map((s) => `
+                  <option value="${esc(s.bunkarName)}">
+                    ${esc(s.bunkarName === _BC_POOL ? 'JOB WORK WAPAS POOL' : s.bunkarName)} (Avl: ${s.qty} Pcs)
+                  </option>
+                `).join('')}
+              </select>
+            </div>
+            <div>
+              <label>Bikri / Design Name * (e.g. 1070, RASHMIKA)</label>
+              <input id="scDesignName" list="scDesignList" placeholder="e.g. 1070" oninput="onSCDesignInput()" />
+              <datalist id="scDesignList">
+                ${designs.map((d) => `<option value="${esc(d.designName)}">`).join('')}
+              </datalist>
+            </div>
+            <div>
+              <label>Qty (Pcs) *</label>
+              <input type="number" id="scQty" min="1" placeholder="e.g. 10" />
+            </div>
+            <div>
+              <label>Quality / Top Line (Enter se Add)</label>
+              <input id="scSpecLine" placeholder="e.g. 3.60 CM EMB JHALAR" data-custom-enter="1"
+                     onkeydown="if(event.key==='Enter'){ event.preventDefault(); addStockConvertRow(); }" />
+            </div>
+          </div>
+          <button type="button" class="btn btn-dark btn-sm" style="margin-top:10px;" onclick="addStockConvertRow()">
+            + Add to Convert List
+          </button>
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr><th>S.No</th><th>Karigar Name (Source)</th><th>→</th><th>Bikri Design (Firm)</th><th>Quality</th><th>Qty</th><th>X</th></tr>
+            </thead>
+            <tbody id="scRowsBody"></tbody>
+          </table>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:14px;">
+          <div style="font-size:17px; font-weight:800;">
+            Total Convert: <span id="scTotalPcs" style="color:#15803d;">${totalConvertPcs} Pcs</span>
+          </div>
+          <button type="button" class="btn btn-success primary-save-btn" onclick="saveStockConvertBatch()">
+            ✅ Convert Stock & Print All Barcode Stickers (Ctrl+S)
+          </button>
+        </div>
+      </div>
+    `;
+
+    renderStockConvertRows();
+    setTimeout(() => document.getElementById('scSource')?.focus(), 60);
+    return;
+  }
+
+  // === VIEW 4 (ORIGINAL): MANUAL BARCODING FORM (Bilkul Pehle Jaisa) ===
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
-        <h2>4. Barcoding (Stock Convert & Sticker Print)</h2>
-        <div>
-          <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['bcDesignPager']; bcState.view='DESIGNS'; renderBarcodeModule();">🎨 Designs (${designs.length})</button>
-          <button class="btn btn-dark btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['bcHistoryPager']; bcState.view='HISTORY'; renderBarcodeModule();">📜 Record</button>
-        </div>
+        <h2>4. Barcoding (Manual Single Entry & Sticker Print)</h2>
       </div>
+      ${getBarcodeTopNavHtml(designs.length)}
 
       ${!firms.length ? `<div style="background:#fef2f2; color:#b91c1c; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px;">
         ⚠️ Pehle <b>⚙️ Settings</b> me Firm Code (KT / IF) add karein!
@@ -215,6 +343,230 @@ async function renderBarcodeModule() {
   }, 80);
 }
 
+// === STOCK CONVERT HELPER FUNCTIONS ===
+async function onSCSourceChange() {
+  const sourceName = document.getElementById('scSource')?.value || '';
+  if (!sourceName) return;
+
+  const src = await dbGet('bunkarStock', sourceName);
+  const avail = src ? src.qty : 0;
+  const alreadyUsed = bcState.convertRows
+    .filter((r) => r.sourceName === sourceName)
+    .reduce((s, r) => s + r.qty, 0);
+  const rem = Math.max(0, avail - alreadyUsed);
+
+  const qtyEl = document.getElementById('scQty');
+  if (qtyEl && rem > 0) qtyEl.value = rem;
+
+  const map = getKarigarDesignMap();
+  const mappedDesign = map[sourceName.toUpperCase()] || '';
+  const desEl = document.getElementById('scDesignName');
+  if (desEl && mappedDesign && !desEl.value.trim()) {
+    desEl.value = mappedDesign;
+    await onSCDesignInput();
+  }
+}
+
+async function onSCDesignInput() {
+  const name = document.getElementById('scDesignName')?.value.trim().toUpperCase();
+  const d = name ? await dbGet('designs', name) : null;
+  const specEl = document.getElementById('scSpecLine');
+  if (d && d.specLine && specEl && !specEl.value.trim()) {
+    specEl.value = d.specLine;
+  }
+}
+
+async function addStockConvertRow() {
+  const srcEl = document.getElementById('scSource');
+  const desEl = document.getElementById('scDesignName');
+  const qtyEl = document.getElementById('scQty');
+  const specEl = document.getElementById('scSpecLine');
+  const firmCode = (document.getElementById('scFirmCode')?.value || '').trim().toUpperCase();
+
+  const sourceName = srcEl.value;
+  const designName = desEl.value.trim().toUpperCase();
+  const qty = parseInt(qtyEl.value, 10);
+  const specLine = specEl.value.trim().toUpperCase();
+
+  if (!sourceName) { srcEl.focus(); return alert('Pehle Karigar / Source chunein!'); }
+  if (!designName) { desEl.focus(); return alert('Bikri / Design Name daalein (e.g. 1070)!'); }
+  if (!firmCode) return alert('Settings me Firm Code add karein!');
+  if (!qty || qty <= 0) { qtyEl.focus(); return alert('Sahi Qty daalein!'); }
+
+  const src = await dbGet('bunkarStock', sourceName);
+  const avail = src ? src.qty : 0;
+  const alreadyUsed = bcState.convertRows
+    .filter((r) => r.sourceName === sourceName)
+    .reduce((s, r) => s + r.qty, 0);
+
+  if (alreadyUsed + qty > avail) {
+    return alert(`${sourceName === _BC_POOL ? 'Job Work Pool' : sourceName} me sirf ${avail} Pcs bache hain (pehle hi ${alreadyUsed} Pcs list me add hain)!`);
+  }
+
+  bcState.convertRows.push({ sourceName, designName, firmCode, specLine, qty });
+  saveKarigarDesignMap(sourceName, designName);
+
+  desEl.value = '';
+  qtyEl.value = '';
+  specEl.value = '';
+  renderStockConvertRows();
+  srcEl.focus();
+}
+
+function removeStockConvertRow(idx) {
+  bcState.convertRows.splice(idx, 1);
+  renderStockConvertRows();
+}
+
+function renderStockConvertRows() {
+  const tbody = document.getElementById('scRowsBody');
+  const totalEl = document.getElementById('scTotalPcs');
+  if (!tbody) return;
+
+  let total = 0;
+  tbody.innerHTML = bcState.convertRows.map((r, i) => {
+    total += r.qty;
+    return `
+      <tr>
+        <td>${i + 1}</td>
+        <td><b>${esc(r.sourceName === _BC_POOL ? 'JOB WORK POOL' : r.sourceName)}</b></td>
+        <td>→</td>
+        <td><b>${esc(r.designName)} (${esc(r.firmCode)})</b></td>
+        <td><small>${esc(r.specLine || '-')}</small></td>
+        <td><b style="color:#15803d;">${r.qty} Pcs</b></td>
+        <td><button type="button" class="btn btn-danger btn-sm" onclick="removeStockConvertRow(${i})">X</button></td>
+      </tr>
+    `;
+  }).join('') || '<tr><td colspan="7" style="color:#6b7280;">Upar se Karigar aur Bikri Design daal kar "+ Add" karein...</td></tr>';
+
+  if (totalEl) totalEl.textContent = total + ' Pcs';
+}
+
+async function saveStockConvertBatch() {
+  try {
+    // Agar user ne "+ Add" dabaye bina seedha Save dabaya ho aur inputs bhare hon
+    if (!bcState.convertRows.length) {
+      const desVal = document.getElementById('scDesignName')?.value.trim();
+      const srcVal = document.getElementById('scSource')?.value;
+      if (srcVal && desVal) {
+        await addStockConvertRow();
+      }
+    }
+    if (!bcState.convertRows.length) return alert('Convert List khali hai! Kam se kam 1 entry add karein.');
+
+    const date = document.getElementById('scDate')?.value || todayISO();
+    const printMode = document.getElementById('scPrintMode')?.value || 'THERMAL';
+
+    // Pre-validate total stock needed per source
+    const neededMap = {};
+    bcState.convertRows.forEach((r) => {
+      neededMap[r.sourceName] = (neededMap[r.sourceName] || 0) + r.qty;
+    });
+    for (const srcName of Object.keys(neededMap)) {
+      const st = await dbGet('bunkarStock', srcName);
+      const avail = st ? st.qty : 0;
+      if (neededMap[srcName] > avail) {
+        return alert(`${srcName} me sirf ${avail} Pcs bache hain, par aap ${neededMap[srcName]} Pcs convert kar rahe ho!`);
+      }
+    }
+
+    let totalQty = 0;
+    const printItems = [];
+    for (const r of bcState.convertRows) {
+      const src = await dbGet('bunkarStock', r.sourceName);
+      const avail = src ? src.qty : 0;
+      await dbPut('bunkarStock', {
+        bunkarName: r.sourceName,
+        qty: Math.max(0, avail - r.qty),
+        updatedAt: new Date().toISOString()
+      });
+
+      const exDes = await dbGet('designs', r.designName);
+      await dbPut('designs', {
+        designName: r.designName,
+        specLine: r.specLine || (exDes ? exDes.specLine : ''),
+        createdAt: exDes ? exDes.createdAt : Date.now()
+      });
+
+      const barcodeVal = `${r.designName} ${r.firmCode}`;
+      const skuKey = `${r.designName}__${r.firmCode}`;
+      const curReady = await dbGet('readyStock', skuKey);
+      await dbPut('readyStock', {
+        skuKey, designName: r.designName, firmCode: r.firmCode,
+        specLine: r.specLine || (curReady ? curReady.specLine : ''),
+        barcodeVal,
+        qty: (curReady ? curReady.qty : 0) + r.qty,
+        updatedAt: new Date().toISOString()
+      });
+
+      await dbPut('barcodingLogs', {
+        date, mode: 'STOCK_CONVERT', sourceName: r.sourceName,
+        designName: r.designName, firmCode: r.firmCode,
+        specLine: r.specLine, barcodeVal, qty: r.qty, createdAt: Date.now()
+      });
+
+      saveKarigarDesignMap(r.sourceName, r.designName);
+      totalQty += r.qty;
+      printItems.push({ ...r });
+    }
+
+    bcState.convertRows = [];
+    if (typeof refreshDashboard === 'function') await refreshDashboard();
+
+    if (confirm(`✅ Total ${totalQty} Pcs Ready Stock me convert ho gayi!\nKya abhi sabhi ${totalQty} Barcode Stickers ek saath Print karne hain?`)) {
+      await printBatchBarcodeStickers(printItems, printMode);
+    }
+    renderBarcodeModule();
+  } catch (err) { alert('Stock Convert Error: ' + err.message); }
+}
+
+async function printBatchBarcodeStickers(items, mode) {
+  await ensureJsBarcodeLoaded();
+  if (typeof ensureOrderPrintSetup === 'function') ensureOrderPrintSetup();
+
+  const isThermal = mode !== 'A4_GRID';
+  let pageSt = document.getElementById('simplitexDynamicPageCSS');
+  if (!pageSt) {
+    pageSt = document.createElement('style');
+    pageSt.id = 'simplitexDynamicPageCSS';
+    document.head.appendChild(pageSt);
+  }
+  pageSt.textContent = isThermal
+    ? `@media print { @page { size: 50mm 25mm; margin: 0; } body { margin: 0; } }`
+    : `@media print { @page { size: A4; margin: 8mm; } }`;
+
+  let labelsHtml = '';
+  items.forEach((it) => {
+    const codeVal = `${it.designName} ${it.firmCode}`;
+    for (let i = 0; i < it.qty; i++) {
+      labelsHtml += `
+        <div style="${isThermal
+          ? 'width:50mm; height:25mm; padding:1.5mm 2mm; page-break-after:always;'
+          : 'width:48mm; height:25mm; padding:2mm; border:1px dashed #ccc; display:inline-block; margin:1mm;'
+        } box-sizing:border-box; text-align:center; font-family:Arial,sans-serif; overflow:hidden;">
+          <div style="font-size:8px; font-weight:700; white-space:nowrap; overflow:hidden;">${esc(it.specLine || '')}</div>
+          <div style="font-size:13px; font-weight:900; line-height:1.1; margin:1px 0;">${esc(it.designName)}</div>
+          <svg class="stx-bc-svg" data-bc-val="${esc(codeVal)}" style="width:92%; height:9mm; display:block; margin:1px auto;"></svg>
+          <div style="font-size:9px; font-weight:800; line-height:1;">${esc(codeVal)}</div>
+        </div>
+      `;
+    }
+  });
+
+  const root = document.getElementById('simplitexPrintRoot');
+  root.innerHTML = `<div style="${isThermal ? '' : 'text-align:left;'}">${labelsHtml}</div>`;
+
+  if (typeof window.JsBarcode === 'function') {
+    root.querySelectorAll('.stx-bc-svg').forEach((svg) => {
+      const codeVal = svg.getAttribute('data-bc-val') || '';
+      window.JsBarcode(svg, codeVal, { format: 'CODE128', width: 1.4, height: 28, displayValue: false, margin: 0 });
+    });
+  }
+
+  setTimeout(() => window.print(), 200);
+}
+
+// === ORIGINAL MANUAL BARCODING FUNCTIONS ===
 async function onBCDesignInput() {
   const name = document.getElementById('bcDesignName').value.trim().toUpperCase();
   const d = name ? await dbGet('designs', name) : null;
@@ -288,7 +640,7 @@ async function saveAndPrintBarcoding() {
     });
 
     await dbPut('barcodingLogs', {
-      date, sourceName, designName, firmCode, specLine, barcodeVal, qty, createdAt: Date.now()
+      date, mode: 'MANUAL', sourceName, designName, firmCode, specLine, barcodeVal, qty, createdAt: Date.now()
     });
 
     if (typeof refreshDashboard === 'function') await refreshDashboard();
@@ -301,47 +653,7 @@ async function saveAndPrintBarcoding() {
 }
 
 async function printBarcodeStickers(specLine, designName, firmCode, count, mode) {
-  await ensureJsBarcodeLoaded();
-  if (typeof ensureOrderPrintSetup === 'function') ensureOrderPrintSetup();
-
-  const codeVal = `${designName} ${firmCode}`;
-  const isThermal = mode !== 'A4_GRID';
-
-  let pageSt = document.getElementById('simplitexDynamicPageCSS');
-  if (!pageSt) {
-    pageSt = document.createElement('style');
-    pageSt.id = 'simplitexDynamicPageCSS';
-    document.head.appendChild(pageSt);
-  }
-  pageSt.textContent = isThermal
-    ? `@media print { @page { size: 50mm 25mm; margin: 0; } body { margin: 0; } }`
-    : `@media print { @page { size: A4; margin: 8mm; } }`;
-
-  let labelsHtml = '';
-  for (let i = 0; i < count; i++) {
-    labelsHtml += `
-      <div style="${isThermal
-        ? 'width:50mm; height:25mm; padding:1.5mm 2mm; page-break-after:always;'
-        : 'width:48mm; height:25mm; padding:2mm; border:1px dashed #ccc; display:inline-block; margin:1mm;'
-      } box-sizing:border-box; text-align:center; font-family:Arial,sans-serif; overflow:hidden;">
-        <div style="font-size:8px; font-weight:700; white-space:nowrap; overflow:hidden;">${esc(specLine || '')}</div>
-        <div style="font-size:13px; font-weight:900; line-height:1.1; margin:1px 0;">${esc(designName)}</div>
-        <svg class="stx-bc-svg" style="width:92%; height:9mm; display:block; margin:1px auto;"></svg>
-        <div style="font-size:9px; font-weight:800; line-height:1;">${esc(codeVal)}</div>
-      </div>
-    `;
-  }
-
-  const root = document.getElementById('simplitexPrintRoot');
-  root.innerHTML = `<div style="${isThermal ? '' : 'text-align:left;'}">${labelsHtml}</div>`;
-
-  if (typeof window.JsBarcode === 'function') {
-    root.querySelectorAll('.stx-bc-svg').forEach((svg) => {
-      window.JsBarcode(svg, codeVal, { format: 'CODE128', width: 1.4, height: 28, displayValue: false, margin: 0 });
-    });
-  }
-
-  setTimeout(() => window.print(), 200);
+  return printBatchBarcodeStickers([{ specLine, designName, firmCode, qty: count }], mode);
 }
 
 async function addNewDesignPrompt() {
