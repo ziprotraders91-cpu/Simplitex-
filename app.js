@@ -1,4 +1,4 @@
-// === SimpliTex Core App, Tally Keyboard Engine, Lock & Settings ===
+// === SimpliTex Core App, Tally Keyboard (Enter + Backspace), Universal Pager & Lock ===
 const MASTER_SECRET = 'SIMPLITEX_MAU_2026_SECRET';
 const JW_POOL_KEY = '__JW_POOL__';
 
@@ -133,7 +133,101 @@ function logoutPin() {
   location.reload();
 }
 
-// 4. Navigation & Stock Drilldown
+// 4. UNIVERSAL SEARCH & 15-ROW PAGINATION ENGINE
+window._stxPagerState = window._stxPagerState || {};
+window._stxPagerConfigs = window._stxPagerConfigs || {};
+
+function mountPagedList(opts) {
+  const host = document.getElementById(opts.id);
+  if (!host) return;
+  if (!window._stxPagerState[opts.id]) {
+    window._stxPagerState[opts.id] = { q: '', page: 1 };
+  }
+  window._stxPagerConfigs[opts.id] = opts;
+  const state = window._stxPagerState[opts.id];
+
+  host.innerHTML = `
+    <div class="search-bar-wrap">
+      <input id="${opts.id}_search" placeholder="${opts.placeholder || '🔍 Universal Search...'}"
+             value="${String(state.q).replace(/"/g, '&quot;')}" data-custom-enter="1" data-no-back="1"
+             oninput="updatePagedQuery('${opts.id}', this.value)" />
+      <button type="button" class="btn btn-light btn-sm" onclick="clearPagedQuery('${opts.id}')">Clear</button>
+    </div>
+    <div id="${opts.id}_body"></div>
+    <div id="${opts.id}_pager" class="pager-bar"></div>
+  `;
+  drawPagedBody(opts.id);
+}
+
+function updatePagedQuery(id, val) {
+  if (!window._stxPagerState[id]) window._stxPagerState[id] = { q: '', page: 1 };
+  window._stxPagerState[id].q = val;
+  window._stxPagerState[id].page = 1;
+  drawPagedBody(id);
+}
+
+function clearPagedQuery(id) {
+  const inp = document.getElementById(id + '_search');
+  if (inp) { inp.value = ''; inp.focus(); }
+  updatePagedQuery(id, '');
+}
+
+function goPagedPage(id, delta) {
+  const st = window._stxPagerState[id];
+  if (!st) return;
+  st.page = Math.max(1, st.page + delta);
+  drawPagedBody(id);
+}
+
+function drawPagedBody(id) {
+  const opts = window._stxPagerConfigs[id];
+  const state = window._stxPagerState[id];
+  const bodyEl = document.getElementById(id + '_body');
+  const pagerEl = document.getElementById(id + '_pager');
+  if (!opts || !bodyEl || !pagerEl) return;
+
+  const perPage = opts.perPage || 15;
+  const q = (state.q || '').trim().toUpperCase();
+  const filtered = q
+    ? opts.items.filter((item) => {
+        const hay = opts.getSearchText ? opts.getSearchText(item) : JSON.stringify(item);
+        return String(hay || '').toUpperCase().includes(q);
+      })
+    : opts.items;
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+  if (state.page > totalPages) state.page = totalPages;
+
+  const start = (state.page - 1) * perPage;
+  const slice = filtered.slice(start, start + perPage);
+
+  if (opts.mode === 'list') {
+    bodyEl.innerHTML = `<div class="list-menu kbd-list">${
+      slice.length ? slice.map((item, idx) => opts.renderRow(item, start + idx, idx)).join('') : (opts.emptyHtml || '<p style="color:#6b7280; font-size:13px;">Koi record nahi mila</p>')
+    }</div>`;
+  } else {
+    bodyEl.innerHTML = `
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>${opts.headHtml || ''}</thead>
+          <tbody ${opts.tbodyId ? `id="${opts.tbodyId}"` : ''}>
+            ${slice.length ? slice.map((item, idx) => opts.renderRow(item, start + idx, idx)).join('') : (opts.emptyHtml || '<tr><td colspan="10">Koi record nahi mila</td></tr>')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  pagerEl.innerHTML = `
+    <div>Total: <b>${filtered.length}</b> | Page <b>${state.page}</b> / <b>${totalPages}</b></div>
+    <div class="pager-btns">
+      <button type="button" class="btn btn-light btn-sm" ${state.page <= 1 ? 'disabled' : ''} onclick="goPagedPage('${id}', -1)">◀️ Prev</button>
+      <button type="button" class="btn btn-light btn-sm" ${state.page >= totalPages ? 'disabled' : ''} onclick="goPagedPage('${id}', 1)">Next ▶️</button>
+    </div>
+  `;
+}
+
+// 5. Navigation & Stock Drilldown (with Search + 15-Row Pagination)
 function getActiveSection() {
   return document.querySelector('.tab-sec:not(.hidden)');
 }
@@ -165,18 +259,56 @@ async function openStockDrilldown() {
   const jwPool = allBunkar.find((b) => b.bunkarName === JW_POOL_KEY);
   const ready = (await dbGetAll('readyStock')).filter((r) => r.qty > 0);
 
-  document.getElementById('stockDetailBunkarBody').innerHTML = bunkarOnly.map((b) => `
-    <tr><td><b>${b.bunkarName}</b></td><td><b>${b.qty} Pcs</b></td></tr>
-  `).join('') || '<tr><td colspan="2">Koi Bunkar stock nahi hai</td></tr>';
+  const sec = document.getElementById('tab-stock-detail');
+  sec.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <h2>Dukan Live Stock Detail</h2>
+        <button class="btn btn-light btn-sm" onclick="openTabByName('tab-dash')">← Back (Esc)</button>
+      </div>
 
-  document.getElementById('stockDetailJWPool').textContent = jwPool ? jwPool.qty : 0;
+      <h3 style="font-size:14px; margin:8px 0;">1. Bunkar-Wise Stock (Click for Passbook)</h3>
+      <div id="stockBunkarPager"></div>
 
-  document.getElementById('stockDetailReadyBody').innerHTML = ready.map((r) => `
-    <tr><td><b>${r.designName} (${r.firmCode})</b></td><td><b>${r.qty} Pcs</b></td></tr>
-  `).join('') || '<tr><td colspan="2">Abhi koi Ready Barcoded stock nahi hai</td></tr>';
+      <h3 style="font-size:14px; margin:16px 0 6px;">2. Job Work se Wapas Pool</h3>
+      <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:10px 14px; border-radius:8px; font-weight:700; color:#1e3a8a;">
+        Total Job Work Returned Pool: <span id="stockDetailJWPool">${jwPool ? jwPool.qty : 0}</span> Pcs
+      </div>
+
+      <h3 style="font-size:14px; margin:16px 0 6px;">3. Ready Barcoded Stock (Design Wise)</h3>
+      <div id="stockReadyPager"></div>
+    </div>
+  `;
+
+  mountPagedList({
+    id: 'stockBunkarPager',
+    items: bunkarOnly,
+    perPage: 15,
+    placeholder: '🔍 Bunkar search karein...',
+    headHtml: '<tr><th>Bunkar / Saree Naam</th><th>Available Pcs</th></tr>',
+    getSearchText: (b) => b.bunkarName,
+    renderRow: (b) => `
+      <tr style="cursor:pointer;" onclick="if(typeof openBunkarPassbook==='function') openBunkarPassbook('${b.bunkarName}')">
+        <td><b style="color:#1d4ed8; text-decoration:underline;">${b.bunkarName}</b> <small>(Passbook)</small></td>
+        <td><b>${b.qty} Pcs</b></td>
+      </tr>
+    `,
+    emptyHtml: '<tr><td colspan="2">Koi Bunkar stock nahi hai</td></tr>'
+  });
+
+  mountPagedList({
+    id: 'stockReadyPager',
+    items: ready,
+    perPage: 15,
+    placeholder: '🔍 Design ya Firm search karein...',
+    headHtml: '<tr><th>Design & Firm</th><th>Available Pcs</th></tr>',
+    getSearchText: (r) => `${r.designName} ${r.firmCode} ${r.specLine || ''}`,
+    renderRow: (r) => `<tr><td><b>${r.designName} (${r.firmCode})</b></td><td><b>${r.qty} Pcs</b></td></tr>`,
+    emptyHtml: '<tr><td colspan="2">Abhi koi Ready Barcoded stock nahi hai</td></tr>'
+  });
 }
 
-// 5. TALLY KEYBOARD ENGINE (Zero Mouse Navigation)
+// 6. TALLY KEYBOARD ENGINE (Enter = Next, Backspace / Shift+Enter = Step Back, Esc = Back Screen)
 function moveListSelection(listEl, dir) {
   const rows = Array.from(listEl.querySelectorAll('.list-row'));
   if (!rows.length) return;
@@ -190,31 +322,44 @@ function moveListSelection(listEl, dir) {
   rows[idx].scrollIntoView({ block: 'nearest' });
 }
 
+function getFormFieldsInSection(sec) {
+  return Array.from(sec.querySelectorAll('input:not([type="hidden"]):not([disabled]), select:not([disabled]), button.primary-save-btn:not([disabled])'))
+    .filter((el) => el.offsetParent !== null);
+}
+
 function focusNextField(currentEl) {
   const sec = getActiveSection();
   if (!sec) return;
-  const fields = Array.from(sec.querySelectorAll('input:not([type="hidden"]):not([disabled]), select:not([disabled]), button.enter-btn:not([disabled])'))
-    .filter((el) => el.offsetParent !== null);
+  const fields = getFormFieldsInSection(sec);
   const idx = fields.indexOf(currentEl);
   if (idx >= 0 && idx + 1 < fields.length) {
     fields[idx + 1].focus();
-    if (fields[idx + 1].select) fields[idx + 1].select();
+    try { if (fields[idx + 1].select) fields[idx + 1].select(); } catch (_) {}
+  }
+}
+
+function focusPrevField(currentEl) {
+  const sec = getActiveSection();
+  if (!sec) return;
+  const fields = getFormFieldsInSection(sec);
+  const idx = fields.indexOf(currentEl);
+  if (idx > 0) {
+    fields[idx - 1].focus();
+    try { if (fields[idx - 1].select) fields[idx - 1].select(); } catch (_) {}
   }
 }
 
 document.addEventListener('keydown', (e) => {
-  // Agar Lock ya PIN screen khuli ho toh skip
   if (!document.getElementById('lockScreen').classList.contains('hidden')) return;
   if (!document.getElementById('pinScreen').classList.contains('hidden')) return;
 
-  // Global Alt + 0..7 Shortcuts
   if (e.altKey) {
     const map = { '0':'tab-dash', '1':'tab-jobwork', '2':'tab-inward', '3':'tab-order', '4':'tab-barcode', '5':'tab-challan', '7':'tab-settings' };
     if (e.key === '6') { e.preventDefault(); openStockDrilldown(); return; }
+    if (e.key === '8' && document.getElementById('tab-daybook')) { e.preventDefault(); openTab('tab-daybook', document.getElementById('navBtnDaybook')); return; }
     if (map[e.key]) { e.preventDefault(); openTabByName(map[e.key]); return; }
   }
 
-  // Ctrl + S = Save Active Form
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     e.preventDefault();
     const sec = getActiveSection();
@@ -223,7 +368,6 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Esc = 1 Step Back (Tally Style)
   if (e.key === 'Escape') {
     e.preventDefault();
     if (typeof window.handleModuleEscape === 'function' && window.handleModuleEscape()) return;
@@ -231,20 +375,47 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  const tag = document.activeElement ? document.activeElement.tagName : '';
+  const el = document.activeElement;
+  const tag = el ? el.tagName : '';
   const isTyping = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA');
   const sec = getActiveSection();
   if (!sec) return;
 
-  // Enter inside Form Inputs -> Move to Next Field
-  if (e.key === 'Enter' && (tag === 'INPUT' || tag === 'SELECT')) {
-    if (document.activeElement.dataset.customEnter === '1') return;
+  // Shift + Enter -> Hamesha 1 step piche box me
+  if (e.key === 'Enter' && e.shiftKey && (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON')) {
     e.preventDefault();
-    focusNextField(document.activeElement);
+    focusPrevField(el);
     return;
   }
 
-  // Arrow Up/Down & Enter on Selectable Lists (.kbd-list)
+  // Backspace -> Box khali ho / shuru me ho / Select ya Button ho toh 1 step piche box me
+  if (e.key === 'Backspace') {
+    if (tag === 'SELECT' || tag === 'BUTTON') {
+      e.preventDefault();
+      focusPrevField(el);
+      return;
+    }
+    if (tag === 'INPUT' && el.dataset.noBack !== '1') {
+      const isEmpty = (el.value === '');
+      let atStart = false;
+      try { atStart = (el.selectionStart === 0 && el.selectionEnd === 0); } catch (_) {}
+      if (isEmpty || atStart) {
+        e.preventDefault();
+        focusPrevField(el);
+        return;
+      }
+    }
+  }
+
+  // Enter -> Agle box me
+  if (e.key === 'Enter' && (tag === 'INPUT' || tag === 'SELECT')) {
+    if (el.dataset.customEnter === '1') return;
+    e.preventDefault();
+    focusNextField(el);
+    return;
+  }
+
+  // Arrow Up/Down & 1-9 on Selectable Lists
   const visibleList = Array.from(sec.querySelectorAll('.kbd-list')).find((l) => l.offsetParent !== null);
   if (visibleList && !isTyping) {
     if (e.key === 'ArrowDown') { e.preventDefault(); moveListSelection(visibleList, 1); return; }
@@ -253,7 +424,6 @@ document.addEventListener('keydown', (e) => {
       const active = visibleList.querySelector('.list-row.kbd-active');
       if (active) { e.preventDefault(); active.click(); return; }
     }
-    // Number keys 1..9 quick pick
     if (/^[1-9]$/.test(e.key)) {
       const target = visibleList.querySelector(`.list-row[data-key="${e.key}"]`);
       if (target) { e.preventDefault(); target.click(); return; }
@@ -261,18 +431,20 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// 6. Multi-Firm Settings
+// 7. Multi-Firm Settings
 async function saveFirm() {
-  const name = document.getElementById('firmName').value.trim();
-  const shortCode = document.getElementById('firmCode').value.trim().toUpperCase();
-  const phone = document.getElementById('firmPhone').value.trim();
-  const gstin = document.getElementById('firmGst').value.trim().toUpperCase();
-  const address = document.getElementById('firmAddress').value.trim();
-  if (!name || !shortCode) return alert('Firm Name aur Short Code zaroori hai!');
-  await dbPut('firms', { name, shortCode, phone, gstin, address });
-  ['firmName','firmCode','firmPhone','firmGst','firmAddress'].forEach((id) => document.getElementById(id).value = '');
-  await loadFirms();
-  alert('Firm save ho gayi!');
+  try {
+    const name = document.getElementById('firmName').value.trim();
+    const shortCode = document.getElementById('firmCode').value.trim().toUpperCase();
+    const phone = document.getElementById('firmPhone').value.trim();
+    const gstin = document.getElementById('firmGst').value.trim().toUpperCase();
+    const address = document.getElementById('firmAddress').value.trim();
+    if (!name || !shortCode) return alert('Firm Name aur Short Code zaroori hai!');
+    await dbPut('firms', { name, shortCode, phone, gstin, address });
+    ['firmName','firmCode','firmPhone','firmGst','firmAddress'].forEach((id) => document.getElementById(id).value = '');
+    await loadFirms();
+    alert('Firm save ho gayi!');
+  } catch (err) { alert('Save Error: ' + err.message); }
 }
 
 async function deleteFirm(id) {
@@ -296,7 +468,7 @@ async function loadFirms() {
     firms.length ? firms.map((f) => f.shortCode).join(' / ') + ' — Saree ERP' : 'Settings me Firm add karein';
 }
 
-// 7. Backup & Dashboard
+// 8. Backup & Dashboard
 async function downloadBackup() {
   const json = await exportFullBackup();
   const blob = new Blob([json], { type: 'application/json' });
