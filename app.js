@@ -1,7 +1,7 @@
-// === SimpliTex Core App v4 (Tally Loader + Auto Stock Audit + Year Closing Opening Snapshot) ===
+// === SimpliTex Core App v5 (Tally Loader + 4-Stage Stock Drilldown + Auto Stock Audit + Year Closing) ===
 const MASTER_SECRET = 'SIMPLITEX_MAU_2026_SECRET';
 const JW_POOL_KEY = '__JW_POOL__';
-let stockTabMode = 'BUNKAR'; // 'BUNKAR' | 'JW_WAPSI' | 'BARCODE'
+let stockTabMode = 'BUNKAR'; // 'BUNKAR' | 'CONVERTED' | 'JW_WAPSI' | 'BARCODE'
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
@@ -266,7 +266,7 @@ function drawPagedBody(id) {
   `;
 }
 
-// 4. Navigation & Stock Drilldown (3 Clean Top Buttons: Bunkar | Job Work se Wapsi | Barcode Stock)
+// 4. Navigation & 4-Stage Stock Drilldown
 function getActiveSection() {
   return document.querySelector('.tab-sec:not(.hidden)');
 }
@@ -300,6 +300,9 @@ async function openStockDrilldown(mode) {
   const bunkarOnly = allBunkar.filter((b) => b.bunkarName !== JW_POOL_KEY && b.qty > 0);
   const bunkarTotal = bunkarOnly.reduce((s, x) => s + (x.qty || 0), 0);
 
+  const convertedList = (await dbGetAll('convertedStock')).filter((c) => c.qty > 0);
+  const convertedTotal = convertedList.reduce((s, x) => s + (x.qty || 0), 0);
+
   const jwPool = allBunkar.find((b) => b.bunkarName === JW_POOL_KEY);
   const jwPoolQty = jwPool ? jwPool.qty : 0;
 
@@ -319,14 +322,17 @@ async function openStockDrilldown(mode) {
       </div>
 
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
-        <button type="button" class="btn" style="${btnStyle('BUNKAR')}" onclick="openStockDrilldown('BUNKAR')">
+        <button type="button" class="btn btn-sm" style="${btnStyle('BUNKAR')}" onclick="openStockDrilldown('BUNKAR')">
           🧵 Bunkar Stock (${bunkarTotal} Pcs)
         </button>
-        <button type="button" class="btn" style="${btnStyle('JW_WAPSI')}" onclick="openStockDrilldown('JW_WAPSI')">
+        <button type="button" class="btn btn-sm" style="${btnStyle('CONVERTED')}" onclick="openStockDrilldown('CONVERTED')">
+          🔄 Converted Stock (${convertedTotal} Pcs)
+        </button>
+        <button type="button" class="btn btn-sm" style="${btnStyle('JW_WAPSI')}" onclick="openStockDrilldown('JW_WAPSI')">
           ↩️ Job Work se Wapsi (${jwPoolQty} Pcs)
         </button>
-        <button type="button" class="btn" style="${btnStyle('BARCODE')}" onclick="openStockDrilldown('BARCODE')">
-          🏷️ Barcode Stock (${readyTotal} Pcs)
+        <button type="button" class="btn btn-sm" style="${btnStyle('BARCODE')}" onclick="openStockDrilldown('BARCODE')">
+          🏷️ Ready Barcode (${readyTotal} Pcs)
         </button>
       </div>
 
@@ -353,6 +359,29 @@ async function openStockDrilldown(mode) {
       `,
       emptyHtml: '<tr><td colspan="2">Koi Bunkar stock nahi hai</td></tr>'
     });
+  } else if (stockTabMode === 'CONVERTED') {
+    content.innerHTML = `
+      <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-size:12.5px; font-weight:700; color:#15803d; margin-bottom:12px;">
+        Dukan par Design Name me convert hua stock (Manual Barcoding & Challan ke liye ready ho sakta hai): <b>${convertedTotal} Pcs</b>
+      </div>
+      <div id="stockConvertedPager"></div>
+    `;
+    mountPagedList({
+      id: 'stockConvertedPager',
+      items: convertedList,
+      perPage: 15,
+      placeholder: '🔍 Design Name ya Quality search karein...',
+      headHtml: '<tr><th>Design / Bikri Name</th><th>Quality / Line</th><th>Available Pcs</th></tr>',
+      getSearchText: (c) => `${c.designName} ${c.specLine || ''}`,
+      renderRow: (c) => `
+        <tr>
+          <td><b>${c.designName}</b></td>
+          <td><small>${c.specLine || '-'}</small></td>
+          <td><b style="color:#1d4ed8;">${c.qty} Pcs</b></td>
+        </tr>
+      `,
+      emptyHtml: '<tr><td colspan="3">Abhi koi Converted Design stock nahi hai</td></tr>'
+    });
   } else if (stockTabMode === 'JW_WAPSI') {
     const rawIn = (typeof dbGetByIndex === 'function')
       ? await dbGetByIndex('jobWorkLedger', 'direction', 'IN')
@@ -364,7 +393,7 @@ async function openStockDrilldown(mode) {
 
     content.innerHTML = `
       <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px 14px; border-radius:8px; font-weight:700; color:#1e3a8a; margin-bottom:12px;">
-        Available Job Work se Wapas Pool (Barcoding / Next Work ke liye): <span style="font-size:18px;">${jwPoolQty} Pcs</span>
+        Available Job Work se Wapas Pool (Stock Convert / Next Work ke liye): <span style="font-size:18px;">${jwPoolQty} Pcs</span>
       </div>
       <div id="stockJWWapsiPager"></div>
     `;
@@ -652,9 +681,9 @@ async function startYearClosing() {
     }
     await downloadBackup();
 
-    // Naye saal ke liye Opening Stock snapshot save karein
     const openingSnapshot = {
       bunkarStock: (await dbGetAll('bunkarStock')).filter((b) => b.qty > 0),
+      convertedStock: (await dbGetAll('convertedStock')).filter((c) => c.qty > 0),
       jobWorkPending: (await dbGetAll('jobWorkPending')).filter((p) => p.qty > 0),
       readyStock: (await dbGetAll('readyStock')).filter((r) => r.qty > 0)
     };
@@ -676,6 +705,7 @@ async function startYearClosing() {
 async function refreshDashboard() {
   await openDB();
   const bunkarAll = await dbGetAll('bunkarStock');
+  const convertedAll = await dbGetAll('convertedStock');
   const pending = await dbGetAll('jobWorkPending');
   const ready = await dbGetAll('readyStock');
   const challansCount = (typeof dbCount === 'function')
@@ -683,9 +713,10 @@ async function refreshDashboard() {
     : (await dbGetAll('challans')).length;
 
   const unbarcodedTotal = bunkarAll.reduce((s, x) => s + (x.qty || 0), 0);
+  const convertedTotal = convertedAll.reduce((s, x) => s + (x.qty || 0), 0);
   const readyTotal = ready.reduce((s, x) => s + (x.qty || 0), 0);
 
-  document.getElementById('statTotalStock').textContent = unbarcodedTotal + readyTotal;
+  document.getElementById('statTotalStock').textContent = unbarcodedTotal + convertedTotal + readyTotal;
   document.getElementById('statPendingJW').textContent = pending.reduce((s, x) => s + (x.qty || 0), 0);
   document.getElementById('statReadyStock').textContent = readyTotal;
   document.getElementById('statChallans').textContent = challansCount;
