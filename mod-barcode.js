@@ -1,7 +1,9 @@
-// === SimpliTex Module 4 v2: Dual Barcoding (Manual + Stock Convert: Karigar -> Bikri Design) ===
+// === SimpliTex Module 4 v3: Dual Barcoding (Manual + Stock Convert + Type-to-Filter Karigar Picker) ===
 
 const _BC_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
 let bcState = { view: 'FORM', convertRows: [] };
+let bcSourceListCache = [];
+let bcPickerIndex = { bc: 0, sc: 0 };
 
 function ensureJsBarcodeLoaded() {
   if (typeof window.JsBarcode === 'function') return Promise.resolve(true);
@@ -69,6 +71,175 @@ function getBarcodeTopNavHtml(designCount) {
       </button>
     </div>
   `;
+}
+
+// === SEARCHABLE KARIGAR / SOURCE PICKER ===
+function buildSourcePickerHtml(prefix, labelText) {
+  const hasStock = bcSourceListCache.length > 0;
+  return `
+    <div>
+      <label>${labelText}</label>
+      <input type="hidden" id="${prefix}Source" value="" />
+      <div style="position:relative;">
+        <input id="${prefix}SourceSearch"
+               autocomplete="off"
+               data-custom-enter="1"
+               data-no-back="1"
+               placeholder="${hasStock ? 'Karigar naam type karein (e.g. FA)...' : '-- Koi Unbarcoded Stock nahi --'}"
+               onfocus="openSourcePicker('${prefix}')"
+               oninput="onSourceSearchInput('${prefix}')"
+               onkeydown="handleSourcePickerKey('${prefix}', event)"
+               onblur="setTimeout(() => closeSourcePicker('${prefix}'), 180)" />
+        <div id="${prefix}SourceDrop"
+             style="display:none; position:absolute; left:0; right:0; top:100%; margin-top:2px; z-index:60; background:#fff; border:1px solid #9ca3af; border-radius:8px; max-height:220px; overflow-y:auto; box-shadow:0 10px 24px rgba(0,0,0,0.16);">
+        </div>
+      </div>
+      <div id="${prefix}SourceAvlHint" style="font-size:11.5px; color:#15803d; font-weight:700; margin-top:3px; min-height:15px;"></div>
+    </div>
+  `;
+}
+
+function getFilteredSourceItems(prefix, query) {
+  const q = String(query || '').trim().toUpperCase();
+  const usedInConvert = (prefix === 'sc')
+    ? bcState.convertRows.reduce((m, r) => { m[r.sourceName] = (m[r.sourceName] || 0) + r.qty; return m; }, {})
+    : {};
+
+  const list = bcSourceListCache
+    .map((s) => ({ ...s, remQty: Math.max(0, s.qty - (usedInConvert[s.value] || 0)) }))
+    .filter((s) => s.remQty > 0);
+
+  if (!q) return list;
+
+  const starts = list.filter((s) => s.label.toUpperCase().startsWith(q));
+  const contains = list.filter((s) => !s.label.toUpperCase().startsWith(q) && s.label.toUpperCase().includes(q));
+  return [...starts, ...contains];
+}
+
+function openSourcePicker(prefix) {
+  bcPickerIndex[prefix] = 0;
+  const searchEl = document.getElementById(prefix + 'SourceSearch');
+  renderSourcePickerDropdown(prefix, searchEl ? searchEl.value : '');
+}
+
+function closeSourcePicker(prefix) {
+  const drop = document.getElementById(prefix + 'SourceDrop');
+  if (drop) drop.style.display = 'none';
+}
+
+function onSourceSearchInput(prefix) {
+  const searchEl = document.getElementById(prefix + 'SourceSearch');
+  const hiddenEl = document.getElementById(prefix + 'Source');
+  const hintEl = document.getElementById(prefix + 'SourceAvlHint');
+  const q = (searchEl ? searchEl.value : '').trim().toUpperCase();
+
+  if (hiddenEl) hiddenEl.value = '';
+  if (hintEl) hintEl.textContent = '';
+  bcPickerIndex[prefix] = 0;
+
+  const exact = bcSourceListCache.find((s) => s.label.toUpperCase() === q || s.value.toUpperCase() === q);
+  if (exact && hiddenEl) {
+    hiddenEl.value = exact.value;
+  }
+
+  renderSourcePickerDropdown(prefix, q);
+}
+
+function renderSourcePickerDropdown(prefix, query) {
+  const drop = document.getElementById(prefix + 'SourceDrop');
+  if (!drop) return;
+
+  const matches = getFilteredSourceItems(prefix, query);
+  if (bcPickerIndex[prefix] >= matches.length) bcPickerIndex[prefix] = 0;
+
+  if (!matches.length) {
+    drop.innerHTML = `<div style="padding:10px 12px; font-size:12.5px; color:#6b7280;">"${esc(query)}" naam ka koi Karigar stock nahi mila</div>`;
+    drop.style.display = 'block';
+    return;
+  }
+
+  drop.innerHTML = matches.map((m, idx) => {
+    const active = idx === bcPickerIndex[prefix];
+    return `
+      <div class="bc-src-opt"
+           data-idx="${idx}"
+           data-val="${esc(m.value)}"
+           onmousedown="event.preventDefault(); pickSourceItem('${prefix}', this.dataset.val)"
+           style="padding:9px 12px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f3f4f6; font-size:13px; background:${active ? '#eff6ff' : '#fff'};">
+        <b style="color:#111827;">${esc(m.label)}</b>
+        <span style="background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:999px; font-size:11.5px; font-weight:700;">${m.remQty} Pcs</span>
+      </div>
+    `;
+  }).join('');
+  drop.style.display = 'block';
+}
+
+async function pickSourceItem(prefix, value) {
+  const matches = getFilteredSourceItems(prefix, '');
+  const found = matches.find((m) => m.value === value) || bcSourceListCache.find((m) => m.value === value);
+  if (!found) return;
+
+  const hiddenEl = document.getElementById(prefix + 'Source');
+  const searchEl = document.getElementById(prefix + 'SourceSearch');
+  const hintEl = document.getElementById(prefix + 'SourceAvlHint');
+  if (hiddenEl) hiddenEl.value = found.value;
+  if (searchEl) searchEl.value = found.label;
+  if (hintEl) hintEl.textContent = `✓ Available Stock: ${found.remQty !== undefined ? found.remQty : found.qty} Pcs`;
+
+  closeSourcePicker(prefix);
+
+  if (prefix === 'sc') {
+    await onSCSourceChange();
+    const desEl = document.getElementById('scDesignName');
+    if (desEl) { desEl.focus(); desEl.select(); }
+  } else {
+    const qtyEl = document.getElementById('bcQty');
+    const desEl = document.getElementById('bcDesignName');
+    if (qtyEl && !qtyEl.value) qtyEl.placeholder = `Max ${found.qty} Pcs`;
+    if (desEl) desEl.focus();
+  }
+}
+
+function handleSourcePickerKey(prefix, e) {
+  const drop = document.getElementById(prefix + 'SourceDrop');
+  const searchEl = document.getElementById(prefix + 'SourceSearch');
+  const matches = getFilteredSourceItems(prefix, searchEl ? searchEl.value : '');
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (!matches.length) return;
+    bcPickerIndex[prefix] = (bcPickerIndex[prefix] + 1) % matches.length;
+    renderSourcePickerDropdown(prefix, searchEl ? searchEl.value : '');
+    const activeEl = drop?.querySelector(`.bc-src-opt[data-idx="${bcPickerIndex[prefix]}"]`);
+    if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!matches.length) return;
+    bcPickerIndex[prefix] = (bcPickerIndex[prefix] - 1 + matches.length) % matches.length;
+    renderSourcePickerDropdown(prefix, searchEl ? searchEl.value : '');
+    const activeEl = drop?.querySelector(`.bc-src-opt[data-idx="${bcPickerIndex[prefix]}"]`);
+    if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (matches.length) {
+      const chosen = matches[bcPickerIndex[prefix]] || matches[0];
+      pickSourceItem(prefix, chosen.value);
+    } else {
+      closeSourcePicker(prefix);
+    }
+    return;
+  }
+
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    closeSourcePicker(prefix);
+  }
 }
 
 async function renderBarcodeModule() {
@@ -165,6 +336,14 @@ async function renderBarcodeModule() {
   }
 
   const stocks = (await dbGetAll('bunkarStock')).filter((s) => s.qty > 0);
+  bcSourceListCache = stocks
+    .map((s) => ({
+      value: s.bunkarName,
+      label: s.bunkarName === _BC_POOL ? 'JOB WORK WAPAS POOL' : s.bunkarName,
+      qty: s.qty
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
   const firms = await dbGetAll('firms');
 
   // === VIEW 3 (NEW): STOCK CONVERT (KARIGAR NAME -> BIKRI DESIGN NAME + BATCH PRINT) ===
@@ -201,20 +380,10 @@ async function renderBarcodeModule() {
 
         <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:8px; margin-bottom:12px;">
           <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:8px;">
-            Karigar Saree ko Bikri Design Name me Badlein (e.g. FARHAN 10 Pcs → Design 1070):
+            Karigar ka naam type karein (e.g. FA likhein → FARHAN dikhega) aur Bikri Design me badlein:
           </div>
           <div class="grid-2">
-            <div>
-              <label>Karigar / Source Saree *</label>
-              <select id="scSource" onchange="onSCSourceChange()">
-                <option value="">-- Karigar / Pool Chunein --</option>
-                ${stocks.map((s) => `
-                  <option value="${esc(s.bunkarName)}">
-                    ${esc(s.bunkarName === _BC_POOL ? 'JOB WORK WAPAS POOL' : s.bunkarName)} (Avl: ${s.qty} Pcs)
-                  </option>
-                `).join('')}
-              </select>
-            </div>
+            ${buildSourcePickerHtml('sc', 'Karigar / Source Saree * (Type Karein)')}
             <div>
               <label>Bikri / Design Name * (e.g. 1070, RASHMIKA)</label>
               <input id="scDesignName" list="scDesignList" placeholder="e.g. 1070" oninput="onSCDesignInput()" />
@@ -258,11 +427,11 @@ async function renderBarcodeModule() {
     `;
 
     renderStockConvertRows();
-    setTimeout(() => document.getElementById('scSource')?.focus(), 60);
+    setTimeout(() => document.getElementById('scSourceSearch')?.focus(), 60);
     return;
   }
 
-  // === VIEW 4 (ORIGINAL): MANUAL BARCODING FORM (Bilkul Pehle Jaisa) ===
+  // === VIEW 4 (ORIGINAL): MANUAL BARCODING FORM (Type-to-Filter Karigar + Purana System) ===
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
@@ -276,16 +445,7 @@ async function renderBarcodeModule() {
 
       <div class="grid-2">
         <div><label>Date</label><input type="date" id="bcDate" value="${todayISO()}" /></div>
-        <div>
-          <label>Kahan se Saree Leni Hai (Bunkar / JW Pool) *</label>
-          <select id="bcSource">
-            ${stocks.length ? stocks.map((s) => `
-              <option value="${esc(s.bunkarName)}">
-                ${esc(s.bunkarName === _BC_POOL ? 'JOB WORK WAPAS POOL' : s.bunkarName)} (Available: ${s.qty} Pcs)
-              </option>
-            `).join('') : '<option value="">-- Koi Unbarcoded Stock nahi hai --</option>'}
-          </select>
-        </div>
+        ${buildSourcePickerHtml('bc', 'Kahan se Saree Leni Hai (Karigar Type Karein) *')}
 
         <div>
           <label>Design / Saree Name * (e.g. RASHMIKA, 1020)</label>
@@ -339,7 +499,7 @@ async function renderBarcodeModule() {
 
   setTimeout(() => {
     updateStickerPreview();
-    document.getElementById('bcDesignName')?.focus();
+    document.getElementById('bcSourceSearch')?.focus();
   }, 80);
 }
 
@@ -377,18 +537,25 @@ async function onSCDesignInput() {
 }
 
 async function addStockConvertRow() {
-  const srcEl = document.getElementById('scSource');
+  const srcHiddenEl = document.getElementById('scSource');
+  const srcSearchEl = document.getElementById('scSourceSearch');
   const desEl = document.getElementById('scDesignName');
   const qtyEl = document.getElementById('scQty');
   const specEl = document.getElementById('scSpecLine');
   const firmCode = (document.getElementById('scFirmCode')?.value || '').trim().toUpperCase();
 
-  const sourceName = srcEl.value;
+  let sourceName = srcHiddenEl ? srcHiddenEl.value : '';
+  if (!sourceName && srcSearchEl && srcSearchEl.value.trim()) {
+    const q = srcSearchEl.value.trim().toUpperCase();
+    const hit = bcSourceListCache.find((s) => s.label.toUpperCase() === q || s.value.toUpperCase() === q);
+    if (hit) sourceName = hit.value;
+  }
+
   const designName = desEl.value.trim().toUpperCase();
   const qty = parseInt(qtyEl.value, 10);
   const specLine = specEl.value.trim().toUpperCase();
 
-  if (!sourceName) { srcEl.focus(); return alert('Pehle Karigar / Source chunein!'); }
+  if (!sourceName) { srcSearchEl?.focus(); return alert('Pehle list me se Karigar / Source chunein!'); }
   if (!designName) { desEl.focus(); return alert('Bikri / Design Name daalein (e.g. 1070)!'); }
   if (!firmCode) return alert('Settings me Firm Code add karein!');
   if (!qty || qty <= 0) { qtyEl.focus(); return alert('Sahi Qty daalein!'); }
@@ -406,11 +573,15 @@ async function addStockConvertRow() {
   bcState.convertRows.push({ sourceName, designName, firmCode, specLine, qty });
   saveKarigarDesignMap(sourceName, designName);
 
+  if (srcHiddenEl) srcHiddenEl.value = '';
+  if (srcSearchEl) srcSearchEl.value = '';
+  const hintEl = document.getElementById('scSourceAvlHint');
+  if (hintEl) hintEl.textContent = '';
   desEl.value = '';
   qtyEl.value = '';
   specEl.value = '';
   renderStockConvertRows();
-  srcEl.focus();
+  srcSearchEl?.focus();
 }
 
 function removeStockConvertRow(idx) {
@@ -444,10 +615,9 @@ function renderStockConvertRows() {
 
 async function saveStockConvertBatch() {
   try {
-    // Agar user ne "+ Add" dabaye bina seedha Save dabaya ho aur inputs bhare hon
     if (!bcState.convertRows.length) {
       const desVal = document.getElementById('scDesignName')?.value.trim();
-      const srcVal = document.getElementById('scSource')?.value;
+      const srcVal = document.getElementById('scSource')?.value || document.getElementById('scSourceSearch')?.value.trim();
       if (srcVal && desVal) {
         await addStockConvertRow();
       }
@@ -457,7 +627,6 @@ async function saveStockConvertBatch() {
     const date = document.getElementById('scDate')?.value || todayISO();
     const printMode = document.getElementById('scPrintMode')?.value || 'THERMAL';
 
-    // Pre-validate total stock needed per source
     const neededMap = {};
     bcState.convertRows.forEach((r) => {
       neededMap[r.sourceName] = (neededMap[r.sourceName] || 0) + r.qty;
@@ -492,7 +661,9 @@ async function saveStockConvertBatch() {
       const skuKey = `${r.designName}__${r.firmCode}`;
       const curReady = await dbGet('readyStock', skuKey);
       await dbPut('readyStock', {
-        skuKey, designName: r.designName, firmCode: r.firmCode,
+        skuKey,
+        designName: r.designName,
+        firmCode: r.firmCode,
         specLine: r.specLine || (curReady ? curReady.specLine : ''),
         barcodeVal,
         qty: (curReady ? curReady.qty : 0) + r.qty,
@@ -500,9 +671,15 @@ async function saveStockConvertBatch() {
       });
 
       await dbPut('barcodingLogs', {
-        date, mode: 'STOCK_CONVERT', sourceName: r.sourceName,
-        designName: r.designName, firmCode: r.firmCode,
-        specLine: r.specLine, barcodeVal, qty: r.qty, createdAt: Date.now()
+        date,
+        mode: 'STOCK_CONVERT',
+        sourceName: r.sourceName,
+        designName: r.designName,
+        firmCode: r.firmCode,
+        specLine: r.specLine,
+        barcodeVal,
+        qty: r.qty,
+        createdAt: Date.now()
       });
 
       saveKarigarDesignMap(r.sourceName, r.designName);
@@ -517,7 +694,9 @@ async function saveStockConvertBatch() {
       await printBatchBarcodeStickers(printItems, printMode);
     }
     renderBarcodeModule();
-  } catch (err) { alert('Stock Convert Error: ' + err.message); }
+  } catch (err) {
+    alert('Stock Convert Error: ' + err.message);
+  }
 }
 
 async function printBatchBarcodeStickers(items, mode) {
@@ -604,14 +783,24 @@ async function updateStickerPreview() {
 async function saveAndPrintBarcoding() {
   try {
     const date = document.getElementById('bcDate').value || todayISO();
-    const sourceName = document.getElementById('bcSource').value;
+    const srcSearchEl = document.getElementById('bcSourceSearch');
+    let sourceName = document.getElementById('bcSource')?.value || '';
+    if (!sourceName && srcSearchEl && srcSearchEl.value.trim()) {
+      const q = srcSearchEl.value.trim().toUpperCase();
+      const hit = bcSourceListCache.find((s) => s.label.toUpperCase() === q || s.value.toUpperCase() === q);
+      if (hit) sourceName = hit.value;
+    }
+
     const designName = document.getElementById('bcDesignName').value.trim().toUpperCase();
     const specLine = document.getElementById('bcSpecLine').value.trim().toUpperCase();
     const firmCode = document.getElementById('bcFirmCode').value.trim().toUpperCase();
     const qty = parseInt(document.getElementById('bcQty').value, 10);
     const printMode = document.getElementById('bcPrintMode').value;
 
-    if (!sourceName) return alert('Source me unbarcoded stock nahi hai!');
+    if (!sourceName) {
+      srcSearchEl?.focus();
+      return alert('Pehle list me se Karigar / Source chunein!');
+    }
     if (!designName) return alert('Design Name daalein!');
     if (!firmCode) return alert('Settings me Firm Code add karein!');
     if (!qty || qty <= 0) return alert('Sahi Quantity daalein!');
