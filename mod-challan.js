@@ -1,6 +1,45 @@
-// === SimpliTex Module 5 & 6: Challan (Half-A4) & A5 Packing Slip (Universal Pager + Aligned) ===
+// === SimpliTex Module 5 & 6: Challan (Half-A4) & A5 Packing Slip (Pending Order Tracker + Auto-Hide Complete) ===
 
-let challanState = { view: 'FORM', items: [], linkedOrderNo: '' };
+let challanState = {
+  view: 'FORM',
+  items: [],
+  linkedOrderNo: '',
+  loadedParty: '',
+  partyOrders: [],
+  allChallans: []
+};
+
+if (!window.stxComputeOrderStatus) {
+  window.stxComputeOrderStatus = function (order, allChallans) {
+    const ordNo = String(order.orderNo);
+    const ordParty = String(order.partyName || '').trim().toUpperCase();
+    const linkedChallans = (allChallans || []).filter(
+      (c) => String(c.orderNo || '') === ordNo &&
+             (!c.partyName || String(c.partyName).trim().toUpperCase() === ordParty)
+    );
+    const sentMap = {};
+    linkedChallans.forEach((c) => {
+      (c.items || []).forEach((it) => {
+        const key = String(it.designName || '').trim().toUpperCase();
+        sentMap[key] = (sentMap[key] || 0) + (Number(it.qty) || 0);
+      });
+    });
+    const remainingPool = { ...sentMap };
+    let totalOrdered = 0, totalSent = 0, totalPending = 0;
+    const items = (order.items || []).map((it) => {
+      const key = String(it.name || '').trim().toUpperCase();
+      const ordQty = Number(it.qty) || 0;
+      const usedSent = Math.min(ordQty, remainingPool[key] || 0);
+      remainingPool[key] = Math.max(0, (remainingPool[key] || 0) - usedSent);
+      const pendingQty = Math.max(0, ordQty - usedSent);
+      totalOrdered += ordQty;
+      totalSent += usedSent;
+      totalPending += pendingQty;
+      return { name: it.name, unit: it.unit || 'Pcs', rate: it.rate, orderedQty: ordQty, sentQty: usedSent, pendingQty };
+    });
+    return { orderNo: order.orderNo, totalOrdered, totalSent, totalPending, isComplete: (order.items || []).length > 0 && totalPending === 0, linkedChallansCount: linkedChallans.length, items };
+  };
+}
 
 const _prevTabHookCh = window.onTabChanged;
 window.onTabChanged = function (tabId) {
@@ -49,7 +88,7 @@ async function renderChallanModule() {
         <div class="card-head">
           <h2>📜 Saved Challans (${challans.length})</h2>
           <div>
-            <button class="btn btn-dark btn-sm" onclick="challanState.view='FORM'; challanState.items=[]; renderChallanModule();">+ Naya Challan</button>
+            <button class="btn btn-dark btn-sm" onclick="challanState.view='FORM'; challanState.items=[]; challanState.linkedOrderNo=''; challanState.loadedParty=''; renderChallanModule();">+ Naya Challan</button>
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
@@ -72,7 +111,7 @@ async function renderChallanModule() {
         const f = firms.find((x) => x.id === Number(c.firmId));
         return `
           <tr>
-            <td><b>#${esc(c.challanNo)}</b></td>
+            <td><b>#${esc(c.challanNo)}</b>${c.orderNo ? `<br/><small style="color:#6b7280;">Ord #${esc(c.orderNo)}</small>` : ''}</td>
             <td style="white-space:nowrap;">${esc(c.date)}</td>
             <td><b>${esc(f ? f.shortCode : '-')}</b></td>
             <td><b>${esc(c.partyName)}</b><br/><small>${esc(c.partyCity || '')} | ${esc(c.transport || '')}</small></td>
@@ -90,11 +129,16 @@ async function renderChallanModule() {
     return;
   }
 
-  // === VIEW 2: NEW CHALLAN FORM (Sabhi Boxes Ek Seedh Me) ===
+  // === VIEW 2: NEW CHALLAN FORM ===
+  challanState.loadedParty = '';
+  challanState.partyOrders = [];
+  challanState.linkedOrderNo = '';
+
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
   const ready = await dbGetAll('readyStock');
   const allChallans = await dbGetAll('challans');
+  challanState.allChallans = allChallans;
   const nextChNo = allChallans.length ? Math.max(...allChallans.map((c) => Number(c.challanNo) || 0)) + 1 : 1;
 
   box.innerHTML = `
@@ -116,16 +160,16 @@ async function renderChallanModule() {
         <div><label>Challan No. *</label><input type="number" id="chNo" value="${nextChNo}" /></div>
         <div><label>Date *</label><input type="date" id="chDate" value="${todayISO()}" /></div>
         <div>
-          <label>Party Name * (Order Rate Auto-Fetch)</label>
+          <label>Party Name * (Pending Order Auto-Load)</label>
           <input id="chPartyName" list="chPartyList" placeholder="e.g. SHREE SHARDA SAREE" onchange="onChallanPartyChange()" />
           <datalist id="chPartyList">
             ${parties.map((p) => `<option value="${esc(p.name)}">`).join('')}
           </datalist>
         </div>
         <div>
-          <label>Order Form Link (Rate Auto-Fetch)</label>
-          <select id="chOrderSelect" onchange="challanState.linkedOrderNo=this.value;">
-            <option value="">-- Latest Order Auto-Check --</option>
+          <label>Pending Order Link (Sirf Adhure Orders)</label>
+          <select id="chOrderSelect" onchange="onChallanOrderSelectChange()">
+            <option value="">-- Pehle Party Chunein --</option>
           </select>
         </div>
         <div><label>City *</label><input id="chPartyCity" placeholder="e.g. CHIPLOON, MUMBAI" /></div>
@@ -133,6 +177,9 @@ async function renderChallanModule() {
         <div><label>Marka</label><input id="chMarka" placeholder="e.g. SSS" /></div>
         <div><label>Transport</label><input id="chTransport" placeholder="e.g. VRL" /></div>
       </div>
+
+      <!-- Live Pending Order Tracker Box -->
+      <div id="chOrderTracker" style="margin-top:12px;"></div>
 
       <!-- Fast Barcode Scan Box -->
       <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:8px; margin:14px 0;">
@@ -199,6 +246,7 @@ async function onChallanPartyChange() {
   const partyName = document.getElementById('chPartyName').value.trim().toUpperCase();
   if (!partyName) return;
 
+  challanState.loadedParty = partyName;
   const parties = await dbGetAll('parties');
   const p = parties.find((x) => x.name.toUpperCase() === partyName);
   if (p) {
@@ -208,17 +256,134 @@ async function onChallanPartyChange() {
     document.getElementById('chTransport').value = p.transport || '';
   }
 
-  const orders = (await dbGetAll('orders'))
+  const allOrders = await dbGetAll('orders');
+  const allChallans = await dbGetAll('challans');
+  challanState.allChallans = allChallans;
+
+  const partyOrders = allOrders
     .filter((o) => o.partyName.toUpperCase() === partyName)
     .sort((a, b) => b.id - a.id);
+  challanState.partyOrders = partyOrders;
+
+  // Sirf PENDING orders hi dropdown me rakhein (Complete orders dropdown se hata diye jayenge)
+  const pendingOrders = [];
+  partyOrders.forEach((o) => {
+    const st = window.stxComputeOrderStatus(o, allChallans);
+    if (!st.isComplete) pendingOrders.push({ order: o, status: st });
+  });
 
   const ordSel = document.getElementById('chOrderSelect');
-  ordSel.innerHTML = '<option value="">-- Latest Order Auto-Check --</option>' +
-    orders.map((o) => `<option value="${o.orderNo}">Order #${o.orderNo} (${o.date}) — ${o.items.length} Items</option>`).join('');
-  if (orders.length) {
-    ordSel.value = String(orders[0].orderNo);
-    challanState.linkedOrderNo = String(orders[0].orderNo);
+  if (pendingOrders.length) {
+    ordSel.innerHTML = '<option value="">-- Bina Order Link --</option>' +
+      pendingOrders.map(({ order: o, status: st }) =>
+        `<option value="${o.orderNo}">Order #${o.orderNo} (${o.date}) — ${st.totalPending} Pcs Baki</option>`
+      ).join('');
+    ordSel.value = String(pendingOrders[0].order.orderNo);
+    challanState.linkedOrderNo = String(pendingOrders[0].order.orderNo);
+  } else if (partyOrders.length) {
+    ordSel.innerHTML = '<option value="">-- Saare Orders Complete Ho Chuke Hain ✅ --</option>';
+    challanState.linkedOrderNo = '';
+  } else {
+    ordSel.innerHTML = '<option value="">-- Is Party ka Koi Order Nahi --</option>';
+    challanState.linkedOrderNo = '';
   }
+
+  renderChallanOrderTracker();
+}
+
+function onChallanOrderSelectChange() {
+  const ordSel = document.getElementById('chOrderSelect');
+  challanState.linkedOrderNo = ordSel ? ordSel.value : '';
+  renderChallanOrderTracker();
+}
+
+function getLinkedOrderLiveProgress() {
+  const linkedNo = document.getElementById('chOrderSelect')?.value || challanState.linkedOrderNo;
+  if (!linkedNo) return null;
+  const order = (challanState.partyOrders || []).find((o) => String(o.orderNo) === String(linkedNo));
+  if (!order) return null;
+
+  const baseStatus = window.stxComputeOrderStatus(order, challanState.allChallans);
+  const cartMap = {};
+  (challanState.items || []).forEach((it) => {
+    const key = String(it.designName || '').trim().toUpperCase();
+    cartMap[key] = (cartMap[key] || 0) + (Number(it.qty) || 0);
+  });
+
+  const cartPool = { ...cartMap };
+  let liveRemainingTotal = 0;
+  const liveItems = baseStatus.items.map((it) => {
+    const key = String(it.name || '').trim().toUpperCase();
+    const inCart = Math.min(it.pendingQty, cartPool[key] || 0);
+    cartPool[key] = Math.max(0, (cartPool[key] || 0) - inCart);
+    const livePending = Math.max(0, it.pendingQty - inCart);
+    liveRemainingTotal += livePending;
+    return { ...it, inCartQty: inCart, livePendingQty: livePending };
+  });
+
+  return {
+    order,
+    baseStatus,
+    liveItems,
+    liveRemainingTotal,
+    willCompleteNow: baseStatus.totalPending > 0 && liveRemainingTotal === 0
+  };
+}
+
+function renderChallanOrderTracker() {
+  const host = document.getElementById('chOrderTracker');
+  if (!host) return;
+
+  const partyName = document.getElementById('chPartyName')?.value.trim().toUpperCase();
+  if (!partyName) { host.innerHTML = ''; return; }
+
+  const progress = getLinkedOrderLiveProgress();
+  if (!progress) {
+    if ((challanState.partyOrders || []).length > 0) {
+      host.innerHTML = `
+        <div style="background:#f0fdf4; border:1px solid #86efac; color:#15803d; padding:10px 12px; border-radius:8px; font-size:12.5px; font-weight:700;">
+          ✅ Is party ke saare (${challanState.partyOrders.length}) Order pure ho chuke hain! (Complete orders dropdown se hata diye gaye hain)
+        </div>
+      `;
+    } else {
+      host.innerHTML = '';
+    }
+    return;
+  }
+
+  const banner = progress.willCompleteNow
+    ? `<div style="background:#dcfce7; border:1px solid #4ade80; color:#15803d; padding:8px 10px; border-radius:6px; font-weight:800; font-size:12.5px; margin-bottom:8px;">
+         🎉 Is Challan ko Save karte hi Order #${esc(progress.order.orderNo)} PURA HO JAYEGA!
+       </div>`
+    : `<div style="font-size:12.5px; font-weight:700; color:#92400e; margin-bottom:6px;">
+         ⏳ Order #${esc(progress.order.orderNo)} Pending Hisab — Abhi Total <b>${progress.liveRemainingTotal} Pcs</b> Aur Bhejna Hai:
+       </div>`;
+
+  host.innerHTML = `
+    <div style="background:#fffbeb; border:1px solid #fcd34d; padding:10px 12px; border-radius:8px;">
+      ${banner}
+      <div style="overflow-x:auto;">
+        <table style="font-size:12px; margin-top:4px;">
+          <thead>
+            <tr><th>Saree</th><th>Order</th><th>Pehle Bheja</th><th>Is Challan Me</th><th>Abhi Baki</th></tr>
+          </thead>
+          <tbody>
+            ${progress.liveItems.map((it) => `
+              <tr>
+                <td><b>${esc(it.name)}</b></td>
+                <td>${it.orderedQty}</td>
+                <td>${it.sentQty}</td>
+                <td>${it.inCartQty}</td>
+                <td>${it.livePendingQty === 0
+                  ? '<b style="color:#15803d;">0 (Pura ✅)</b>'
+                  : `<b style="color:#b45309;">${it.livePendingQty} Pcs</b>`}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 async function findRateFromOrder(partyName, designName) {
@@ -231,17 +396,22 @@ async function findRateFromOrder(partyName, designName) {
     const exactOrder = orders.find((o) => String(o.orderNo) === String(linkedNo));
     if (exactOrder) {
       const hit = exactOrder.items.find((it) => it.name.toUpperCase() === designName.toUpperCase());
-      if (hit) return { rate: hit.rate, orderNo: exactOrder.orderNo };
+      if (hit) return { rate: hit.rate, orderNo: exactOrder.orderNo, fromLinked: true };
     }
   }
   for (const ord of orders) {
     const hit = ord.items.find((it) => it.name.toUpperCase() === designName.toUpperCase());
-    if (hit) return { rate: hit.rate, orderNo: ord.orderNo };
+    if (hit) return { rate: hit.rate, orderNo: ord.orderNo, fromLinked: false };
   }
   return null;
 }
 
 async function handleChallanScan() {
+  const partyName = document.getElementById('chPartyName').value.trim().toUpperCase();
+  if (partyName && challanState.loadedParty !== partyName) {
+    await onChallanPartyChange();
+  }
+
   const scanEl = document.getElementById('chScanInput');
   const raw = scanEl.value.trim().toUpperCase();
   if (!raw) return;
@@ -256,14 +426,26 @@ async function handleChallanScan() {
   const firmCode = matched ? matched.firmCode : (raw.split(' ')[1] || (activeFirm ? activeFirm.shortCode : 'KT'));
   const availQty = matched ? matched.qty : 0;
 
-  const partyName = document.getElementById('chPartyName').value.trim().toUpperCase();
   const rateInfo = partyName ? await findRateFromOrder(partyName, designName) : null;
+  const progress = getLinkedOrderLiveProgress();
+  const orderItem = progress
+    ? progress.liveItems.find((it) => it.name.toUpperCase() === designName.toUpperCase())
+    : null;
 
   const hint = document.getElementById('chScanHint');
-  if (rateInfo) {
-    document.getElementById('chItemRate').value = rateInfo.rate;
-    hint.textContent = `✓ ${designName} (${firmCode}) | Ready Stock: ${availQty} Pcs | Order #${rateInfo.orderNo} se Rate: ₹${rateInfo.rate}`;
+  if (rateInfo) document.getElementById('chItemRate').value = rateInfo.rate;
+
+  if (orderItem && orderItem.livePendingQty <= 0) {
+    hint.style.color = '#b91c1c';
+    hint.textContent = `⚠️ WARNING: "${designName}" ka Order #${progress.order.orderNo} poora ho chuka hai! (${orderItem.orderedQty}/${orderItem.orderedQty} bhej chuke ho) | Ready Stock: ${availQty} Pcs`;
+  } else if (orderItem) {
+    hint.style.color = '#15803d';
+    hint.textContent = `✓ ${designName} (${firmCode}) | Ready Stock: ${availQty} Pcs | Order #${progress.order.orderNo} Rate: ₹${rateInfo ? rateInfo.rate : orderItem.rate} | Baki: ${orderItem.livePendingQty} Pcs`;
+  } else if (rateInfo) {
+    hint.style.color = '#15803d';
+    hint.textContent = `✓ ${designName} (${firmCode}) | Ready Stock: ${availQty} Pcs | Purane Order #${rateInfo.orderNo} se Rate: ₹${rateInfo.rate}`;
   } else {
+    hint.style.color = '#b45309';
     hint.textContent = `✓ ${designName} (${firmCode}) | Ready Stock: ${availQty} Pcs | Order me rate nahi mila (khud daalein)`;
   }
 
@@ -279,6 +461,11 @@ async function handleChallanScan() {
 }
 
 async function addChallanRow() {
+  const partyName = document.getElementById('chPartyName').value.trim().toUpperCase();
+  if (partyName && challanState.loadedParty !== partyName) {
+    await onChallanPartyChange();
+  }
+
   const scanEl = document.getElementById('chScanInput');
   const qtyEl = document.getElementById('chItemQty');
   const rateEl = document.getElementById('chItemRate');
@@ -298,6 +485,23 @@ async function addChallanRow() {
   const designName = matched ? matched.designName : raw.split(' ')[0];
   const firmCode = matched ? matched.firmCode : (raw.split(' ')[1] || (activeFirm ? activeFirm.shortCode : 'KT'));
   const skuKey = `${designName}__${firmCode}`;
+
+  // Order Pending Qty Warning Check
+  const progress = getLinkedOrderLiveProgress();
+  if (progress) {
+    const orderItem = progress.liveItems.find((it) => it.name.toUpperCase() === designName.toUpperCase());
+    if (orderItem) {
+      if (orderItem.livePendingQty <= 0) {
+        if (!confirm(`⚠️ WARNING: "${designName}" ka Order #${progress.order.orderNo} pehle hi poora ho chuka hai (0 Pcs baki)!\nPhir bhi is Challan me ${qty} Pcs add karein?`)) {
+          return;
+        }
+      } else if (qty > orderItem.livePendingQty) {
+        if (!confirm(`⚠️ WARNING: "${designName}" ke sirf ${orderItem.livePendingQty} Pcs bhejna baki hai (Order: ${orderItem.orderedQty}).\nAap ${qty} Pcs add kar rahe ho—phir bhi add karein?`)) {
+          return;
+        }
+      }
+    }
+  }
 
   const existing = challanState.items.find((it) => it.skuKey === skuKey && it.rate === rate);
   if (existing) {
@@ -343,6 +547,7 @@ function renderChallanItemsTable() {
 
   document.getElementById('chTotalPcs').textContent = totalPcs;
   document.getElementById('chTotalAmt').textContent = '₹' + totalAmt.toLocaleString('en-IN');
+  renderChallanOrderTracker();
 }
 
 async function saveChallanForm() {
@@ -387,14 +592,35 @@ async function saveChallanForm() {
 
     if (typeof refreshDashboard === 'function') await refreshDashboard();
 
+    // Check Order Completion Status after saving
+    let orderMsg = '';
+    if (orderNo) {
+      const allOrders = await dbGetAll('orders');
+      const allChallans = await dbGetAll('challans');
+      const linkedOrd = allOrders.find(
+        (o) => String(o.orderNo) === String(orderNo) && o.partyName.toUpperCase() === partyName
+      );
+      if (linkedOrd) {
+        const st = window.stxComputeOrderStatus(linkedOrd, allChallans);
+        if (st.isComplete) {
+          orderMsg = `\n🎉 Order #${orderNo} ab PURA HO CHUKA HAI! (Dropdown se hata diya gaya)\n`;
+        } else {
+          orderMsg = `\n⏳ Order #${orderNo} me abhi ${st.totalPending} Pcs bhejna baki hai.\n`;
+        }
+      }
+    }
+
     const choice = prompt(
-      `✅ Challan #${challanNo} Save ho gaya!\n` +
-      `1 likhein -> Challan Print (Half-A4)\n` +
+      `✅ Challan #${challanNo} Save ho gaya!` +
+      orderMsg +
+      `\n1 likhein -> Challan Print (Half-A4)\n` +
       `2 likhein -> A5 Packing Slip Print\n` +
       `(Cancel dabakar baad me Saved Challans se print karein)`,
       '1'
     );
     challanState.items = [];
+    challanState.linkedOrderNo = '';
+    challanState.loadedParty = '';
     await renderChallanModule();
 
     if (choice === '1') await printChallanById(chId);
