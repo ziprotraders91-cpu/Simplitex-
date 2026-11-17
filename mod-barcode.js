@@ -1,19 +1,35 @@
-// === SimpliTex Module 4 v5: 2-Stage Barcoding (Stock Convert -> Manual Challan Barcoding) ===
+// === SimpliTex Module 4 v6: 2-Stage Barcoding (Stock Convert -> Manual Challan Barcoding + Offline JsBarcode Fallback) ===
 
 const _BC_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
 let bcState = { view: 'CONVERT', convertRows: [], editId: null, origLog: null };
 let bcSourceListCache = [];
 let bcPickerIndex = { bc: 0, sc: 0 };
+let _jsBarcodeLoadPromise = null;
 
 function ensureJsBarcodeLoaded() {
   if (typeof window.JsBarcode === 'function') return Promise.resolve(true);
-  return new Promise((resolve) => {
-    const sc = document.createElement('script');
-    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js';
-    sc.onload = () => resolve(true);
-    sc.onerror = () => resolve(false);
-    document.head.appendChild(sc);
+  if (_jsBarcodeLoadPromise) return _jsBarcodeLoadPromise;
+
+  _jsBarcodeLoadPromise = new Promise((resolve) => {
+    const loadFromCdn = () => {
+      const cdn = document.createElement('script');
+      cdn.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js';
+      cdn.onload = () => resolve(typeof window.JsBarcode === 'function');
+      cdn.onerror = () => resolve(false);
+      document.head.appendChild(cdn);
+    };
+
+    const local = document.createElement('script');
+    local.src = './JsBarcode.all.min.js';
+    local.onload = () => {
+      if (typeof window.JsBarcode === 'function') resolve(true);
+      else loadFromCdn();
+    };
+    local.onerror = () => loadFromCdn();
+    document.head.appendChild(local);
   });
+
+  return _jsBarcodeLoadPromise;
 }
 
 function getKarigarDesignMap() {
