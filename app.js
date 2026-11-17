@@ -1,4 +1,4 @@
-// === SimpliTex Core App, Tally Keyboard (Enter + Backspace), Universal Pager & Stock Tabs ===
+// === SimpliTex Core App v2 (Fast DB Counts, Backup Reminder, Year Closing & Tally Keyboard) ===
 const MASTER_SECRET = 'SIMPLITEX_MAU_2026_SECRET';
 const JW_POOL_KEY = '__JW_POOL__';
 let stockTabMode = 'BUNKAR'; // 'BUNKAR' | 'JW_WAPSI' | 'BARCODE'
@@ -199,6 +199,7 @@ function openTab(tabId, btn) {
   if (btn) btn.classList.add('active');
 
   if (tabId === 'tab-dash') refreshDashboard();
+  if (tabId === 'tab-settings') renderSettingsBackupExtras();
   if (typeof window.onTabChanged === 'function') window.onTabChanged(tabId);
 }
 
@@ -273,8 +274,12 @@ async function openStockDrilldown(mode) {
       emptyHtml: '<tr><td colspan="2">Koi Bunkar stock nahi hai</td></tr>'
     });
   } else if (stockTabMode === 'JW_WAPSI') {
-    const jwReturns = (await dbGetAll('jobWorkLedger'))
-      .filter((l) => l.direction === 'IN' && l.jobWorkType !== 'DIRECT_BAITHAK')
+    const rawIn = (typeof dbGetByIndex === 'function')
+      ? await dbGetByIndex('jobWorkLedger', 'direction', 'IN')
+      : (await dbGetAll('jobWorkLedger')).filter((l) => l.direction === 'IN');
+
+    const jwReturns = rawIn
+      .filter((l) => l.jobWorkType !== 'DIRECT_BAITHAK')
       .sort((a, b) => b.createdAt - a.createdAt);
 
     content.innerHTML = `
@@ -477,7 +482,7 @@ async function loadFirms() {
     firms.length ? firms.map((f) => f.shortCode).join(' / ') + ' — Saree ERP' : 'Settings me Firm add karein';
 }
 
-// 7. Backup & Dashboard
+// 7. Backup, Reminder, Year Closing & Fast Dashboard
 async function downloadBackup() {
   const json = await exportFullBackup();
   const blob = new Blob([json], { type: 'application/json' });
@@ -485,6 +490,8 @@ async function downloadBackup() {
   a.href = URL.createObjectURL(blob);
   a.download = `SimpliTex-Backup-${getTodayYMD()}.json`;
   a.click();
+  localStorage.setItem('simplitex_last_backup_ms', String(Date.now()));
+  renderSettingsBackupExtras();
 }
 
 async function handleRestore(input) {
@@ -497,12 +504,70 @@ async function handleRestore(input) {
   } catch (err) { alert('Error: ' + err.message); }
 }
 
+function renderSettingsBackupExtras() {
+  const sec = document.getElementById('tab-settings');
+  if (!sec) return;
+  let host = document.getElementById('stxBackupExtras');
+  if (!host) {
+    const cards = sec.querySelectorAll('.card');
+    const backupCard = cards[1] || cards[0];
+    if (!backupCard) return;
+    host = document.createElement('div');
+    host.id = 'stxBackupExtras';
+    host.style.marginTop = '12px';
+    backupCard.appendChild(host);
+  }
+
+  const lastMs = Number(localStorage.getItem('simplitex_last_backup_ms') || 0);
+  let statusHtml = '';
+  if (!lastMs) {
+    statusHtml = '<span style="color:#b91c1c; font-weight:700;">⚠️ Abhi tak ek baar bhi Backup nahi liya gaya hai!</span>';
+  } else {
+    const daysAgo = Math.floor((Date.now() - lastMs) / 86400000);
+    const dStr = new Date(lastMs).toLocaleDateString('en-IN');
+    statusHtml = daysAgo > 7
+      ? `<span style="color:#b45309; font-weight:700;">⚠️ Last Backup: ${dStr} (${daysAgo} din pehle) — Naya Backup le lein!</span>`
+      : `<span style="color:#15803d; font-weight:700;">✅ Last Backup: ${dStr} (${daysAgo === 0 ? 'Aaj' : daysAgo + ' din pehle'})</span>`;
+  }
+
+  host.innerHTML = `
+    <div style="font-size:12.5px; margin-bottom:10px;">${statusHtml}</div>
+    <div style="border-top:1px dashed #d1d5db; padding-top:10px;">
+      <button type="button" class="btn btn-light btn-sm" onclick="startYearClosing()">
+        🗓️ Year Closing (Backup Le Kar Purane Bills Clear Karein)
+      </button>
+      <div style="font-size:11.5px; color:#6b7280; margin-top:4px;">
+        *Isse pehle poora Backup download hoga, phir sirf purane Orders/Challans/Ledger saaf honge — aapka Live Stock, Parties, Designs aur Pending Karigar 100% safe rahenge.
+      </div>
+    </div>
+  `;
+}
+
+async function startYearClosing() {
+  if (!confirm('🗓️ Kya aap Naya Saal (Year Closing) shuru karna chahte hain?\nPehle aapka poora Backup (.json) download hoga, phir purane Orders, Challans, Barcoding Logs aur Job Work Ledger saaf honge.\n(Aapka Live Stock, Parties, Designs aur Karigar Pending SAFE rahenge.)')) return;
+  const check = prompt('Confirm karne ke liye "CLOSE" likhein:');
+  if (!check || check.trim().toUpperCase() !== 'CLOSE') return alert('Year Closing cancel kar diya gaya.');
+
+  try {
+    await downloadBackup();
+    if (typeof clearTransactionStoresForNewYear === 'function') {
+      await clearTransactionStoresForNewYear();
+    }
+    if (typeof refreshDashboard === 'function') await refreshDashboard();
+    alert('✅ Poora Backup download ho gaya aur Naya Saal ready hai! Live Stock aur Masters bilkul safe hain.');
+  } catch (err) {
+    alert('Year Closing Error: ' + err.message);
+  }
+}
+
 async function refreshDashboard() {
   await openDB();
   const bunkarAll = await dbGetAll('bunkarStock');
   const pending = await dbGetAll('jobWorkPending');
   const ready = await dbGetAll('readyStock');
-  const challans = await dbGetAll('challans');
+  const challansCount = (typeof dbCount === 'function')
+    ? await dbCount('challans')
+    : (await dbGetAll('challans')).length;
 
   const unbarcodedTotal = bunkarAll.reduce((s, x) => s + (x.qty || 0), 0);
   const readyTotal = ready.reduce((s, x) => s + (x.qty || 0), 0);
@@ -510,7 +575,7 @@ async function refreshDashboard() {
   document.getElementById('statTotalStock').textContent = unbarcodedTotal + readyTotal;
   document.getElementById('statPendingJW').textContent = pending.reduce((s, x) => s + (x.qty || 0), 0);
   document.getElementById('statReadyStock').textContent = readyTotal;
-  document.getElementById('statChallans').textContent = challans.length;
+  document.getElementById('statChallans').textContent = challansCount;
 }
 
 function updateNetBadge() {
@@ -525,6 +590,7 @@ async function initApp() {
   await openDB();
   await loadFirms();
   await refreshDashboard();
+  renderSettingsBackupExtras();
 }
 
 window.addEventListener('DOMContentLoaded', initApp);
