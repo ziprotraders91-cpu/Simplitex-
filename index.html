@@ -26,19 +26,6 @@
     </div>
   </div>
 
-  <!-- PIN Login -->
-  <div id="pinScreen" class="overlay hidden">
-    <div class="lock-box">
-      <img src="./icon-192.png" alt="SimpliTex" />
-      <h2 style="margin:4px 0;">SimpliTex Login</h2>
-      <p id="pinHint" style="font-size:13px; color:#6b7280;"></p>
-      <input type="text" id="loginUser" placeholder="Username / Malik Name" style="margin-bottom:8px;" />
-      <input type="password" id="loginPin" placeholder="4-Digit PIN (Enter dabaye)" maxlength="8" style="margin-bottom:12px;"
-             onkeydown="if(event.key==='Enter') handlePinLogin()" />
-      <button class="btn btn-dark" style="width:100%;" onclick="handlePinLogin()">Enter App</button>
-    </div>
-  </div>
-
   <!-- Top Header -->
   <header class="topbar">
     <div class="brand">
@@ -192,7 +179,6 @@
       <div class="card">
         <h2>Subscription & Device Info</h2>
         <p style="font-size:13px;">Device ID: <b id="settingsDeviceId"></b> | Valid Till: <b id="settingsExpiry"></b></p>
-        <button class="btn btn-danger btn-sm" onclick="logoutPin()">Lock / Logout PIN</button>
       </div>
     </section>
 
@@ -202,11 +188,8 @@
   <script src="./app.js"></script>
   <script src="./mod-inward.js"></script>
   <script src="./mod-order.js"></script>
-  <script src="./mod-order.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
   <script src="./mod-barcode.js"></script>
-  <script src="./mod-barcode.js"></script>
-  <script src="./mod-challan.js"></script>
   <script src="./mod-challan.js"></script>
   <script src="./mod-daybook.js"></script>
 </body>
