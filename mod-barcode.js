@@ -1,7 +1,7 @@
-// === SimpliTex Module 4 v3: Dual Barcoding (Manual + Stock Convert + Type-to-Filter Karigar Picker) ===
+// === SimpliTex Module 4 v4: Dual Barcoding + Type-to-Filter + Edit + Auto Stock Engine ===
 
 const _BC_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
-let bcState = { view: 'FORM', convertRows: [] };
+let bcState = { view: 'FORM', convertRows: [], editId: null, origLog: null };
 let bcSourceListCache = [];
 let bcPickerIndex = { bc: 0, sc: 0 };
 
@@ -32,6 +32,8 @@ const _prevTabHookBC = window.onTabChanged;
 window.onTabChanged = function (tabId) {
   if (_prevTabHookBC) _prevTabHookBC(tabId);
   if (tabId === 'tab-barcode') {
+    bcState.editId = null;
+    bcState.origLog = null;
     if (bcState.view !== 'CONVERT') bcState.view = 'FORM';
     ensureJsBarcodeLoaded();
     renderBarcodeModule();
@@ -42,10 +44,19 @@ const _prevEscHookBC = window.handleModuleEscape;
 window.handleModuleEscape = function () {
   if (_prevEscHookBC && _prevEscHookBC()) return true;
   const sec = document.querySelector('.tab-sec:not(.hidden)');
-  if (sec && sec.id === 'tab-barcode' && (bcState.view === 'DESIGNS' || bcState.view === 'HISTORY')) {
-    bcState.view = 'FORM';
-    renderBarcodeModule();
-    return true;
+  if (sec && sec.id === 'tab-barcode') {
+    if (bcState.editId) {
+      bcState.editId = null;
+      bcState.origLog = null;
+      bcState.view = 'HISTORY';
+      renderBarcodeModule();
+      return true;
+    }
+    if (bcState.view === 'DESIGNS' || bcState.view === 'HISTORY') {
+      bcState.view = 'FORM';
+      renderBarcodeModule();
+      return true;
+    }
   }
   return false;
 };
@@ -57,16 +68,16 @@ function getBarcodeTopNavHtml(designCount) {
 
   return `
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
-      <button type="button" class="btn btn-sm" style="${mStyle('FORM')}" onclick="bcState.view='FORM'; renderBarcodeModule();">
+      <button type="button" class="btn btn-sm" style="${mStyle('FORM')}" onclick="bcState.editId=null; bcState.origLog=null; bcState.view='FORM'; renderBarcodeModule();">
         🏷️ Manual Barcoding (Purana)
       </button>
-      <button type="button" class="btn btn-sm" style="${mStyle('CONVERT')}" onclick="bcState.view='CONVERT'; renderBarcodeModule();">
+      <button type="button" class="btn btn-sm" style="${mStyle('CONVERT')}" onclick="bcState.editId=null; bcState.origLog=null; bcState.view='CONVERT'; renderBarcodeModule();">
         🔄 Stock Convert (Karigar → Design)
       </button>
-      <button type="button" class="btn btn-sm" style="${mStyle('DESIGNS')}" onclick="if(window._stxPagerState) delete window._stxPagerState['bcDesignPager']; bcState.view='DESIGNS'; renderBarcodeModule();">
+      <button type="button" class="btn btn-sm" style="${mStyle('DESIGNS')}" onclick="if(window._stxPagerState) delete window._stxPagerState['bcDesignPager']; bcState.editId=null; bcState.view='DESIGNS'; renderBarcodeModule();">
         🎨 Designs (${designCount})
       </button>
-      <button type="button" class="btn btn-sm" style="${mStyle('HISTORY')}" onclick="if(window._stxPagerState) delete window._stxPagerState['bcHistoryPager']; bcState.view='HISTORY'; renderBarcodeModule();">
+      <button type="button" class="btn btn-sm" style="${mStyle('HISTORY')}" onclick="if(window._stxPagerState) delete window._stxPagerState['bcHistoryPager']; bcState.editId=null; bcState.view='HISTORY'; renderBarcodeModule();">
         📜 Record
       </button>
     </div>
@@ -110,7 +121,6 @@ function getFilteredSourceItems(prefix, query) {
     .filter((s) => s.remQty > 0);
 
   if (!q) return list;
-
   const starts = list.filter((s) => s.label.toUpperCase().startsWith(q));
   const contains = list.filter((s) => !s.label.toUpperCase().startsWith(q) && s.label.toUpperCase().includes(q));
   return [...starts, ...contains];
@@ -138,9 +148,7 @@ function onSourceSearchInput(prefix) {
   bcPickerIndex[prefix] = 0;
 
   const exact = bcSourceListCache.find((s) => s.label.toUpperCase() === q || s.value.toUpperCase() === q);
-  if (exact && hiddenEl) {
-    hiddenEl.value = exact.value;
-  }
+  if (exact && hiddenEl) hiddenEl.value = exact.value;
 
   renderSourcePickerDropdown(prefix, q);
 }
@@ -248,7 +256,7 @@ async function renderBarcodeModule() {
   const box = document.getElementById('tab-barcode');
   const designs = await dbGetAll('designs');
 
-  // === VIEW 1: DESIGN MASTER (Universal Search + 15-Row Pager) ===
+  // === VIEW 1: DESIGN MASTER ===
   if (bcState.view === 'DESIGNS') {
     const ready = await dbGetAll('readyStock');
     const enriched = designs.map((d) => {
@@ -287,6 +295,7 @@ async function renderBarcodeModule() {
           <td><b>${esc(d.stockTxt)}</b></td>
           <td style="white-space:nowrap;">
             <button class="btn btn-dark btn-sm" onclick="quickReprintPrompt('${esc(d.designName)}','${esc(d.specLine || '')}')">🖨️ Sticker</button>
+            <button class="btn btn-light btn-sm" onclick="editDesignSpec('${esc(d.designName)}')">✏️ Edit</button>
             <button class="btn btn-danger btn-sm" onclick="deleteDesign('${esc(d.designName)}')">X</button>
           </td>
         </tr>
@@ -296,7 +305,7 @@ async function renderBarcodeModule() {
     return;
   }
 
-  // === VIEW 2: BARCODING RECORD (Universal Search + 15-Row Pager) ===
+  // === VIEW 2: BARCODING RECORD (With Edit & Delete) ===
   if (bcState.view === 'HISTORY') {
     const logs = (await dbGetAll('barcodingLogs')).sort((a, b) => b.createdAt - a.createdAt);
     box.innerHTML = `
@@ -326,7 +335,8 @@ async function renderBarcodeModule() {
           <td><b>${l.qty}</b></td>
           <td style="white-space:nowrap;">
             <button class="btn btn-dark btn-sm" onclick="printBarcodeStickers('${esc(l.specLine || '')}','${esc(l.designName)}','${esc(l.firmCode)}',${l.qty},'THERMAL')">🖨️</button>
-            <button class="btn btn-danger btn-sm" onclick="reverseBarcodingLog(${l.id})">↩️ Delete</button>
+            <button class="btn btn-light btn-sm" onclick="editBarcodingLog(${l.id})">✏️ Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="reverseBarcodingLog(${l.id})">↩️ Del</button>
           </td>
         </tr>
       `,
@@ -335,18 +345,26 @@ async function renderBarcodeModule() {
     return;
   }
 
-  const stocks = (await dbGetAll('bunkarStock')).filter((s) => s.qty > 0);
-  bcSourceListCache = stocks
-    .map((s) => ({
-      value: s.bunkarName,
-      label: s.bunkarName === _BC_POOL ? 'JOB WORK WAPAS POOL' : s.bunkarName,
-      qty: s.qty
+  const rawStocks = await dbGetAll('bunkarStock');
+  const stockMap = {};
+  rawStocks.forEach((s) => { stockMap[s.bunkarName] = s.qty; });
+  if (bcState.view === 'FORM' && bcState.editId && bcState.origLog) {
+    const sn = bcState.origLog.sourceName;
+    stockMap[sn] = (stockMap[sn] || 0) + (Number(bcState.origLog.qty) || 0);
+  }
+
+  bcSourceListCache = Object.keys(stockMap)
+    .filter((k) => stockMap[k] > 0)
+    .map((k) => ({
+      value: k,
+      label: k === _BC_POOL ? 'JOB WORK WAPAS POOL' : k,
+      qty: stockMap[k]
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
   const firms = await dbGetAll('firms');
 
-  // === VIEW 3 (NEW): STOCK CONVERT (KARIGAR NAME -> BIKRI DESIGN NAME + BATCH PRINT) ===
+  // === VIEW 3: STOCK CONVERT ===
   if (bcState.view === 'CONVERT') {
     const totalConvertPcs = bcState.convertRows.reduce((s, r) => s + r.qty, 0);
 
@@ -361,7 +379,7 @@ async function renderBarcodeModule() {
           ⚠️ Pehle <b>⚙️ Settings</b> me Firm Code (KT / IF) add karein!
         </div>` : ''}
 
-        <div class="grid-2" style="margin-bottom:12px;">
+        <div class="grid-2" style="margin-bottom:12px; align-items:start;">
           <div><label>Date *</label><input type="date" id="scDate" value="${todayISO()}" /></div>
           <div>
             <label>Firm Short Code * (KT / IF)</label>
@@ -382,7 +400,7 @@ async function renderBarcodeModule() {
           <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:8px;">
             Karigar ka naam type karein (e.g. FA likhein → FARHAN dikhega) aur Bikri Design me badlein:
           </div>
-          <div class="grid-2">
+          <div class="grid-2" style="align-items:start;">
             ${buildSourcePickerHtml('sc', 'Karigar / Source Saree * (Type Karein)')}
             <div>
               <label>Bikri / Design Name * (e.g. 1070, RASHMIKA)</label>
@@ -431,11 +449,15 @@ async function renderBarcodeModule() {
     return;
   }
 
-  // === VIEW 4 (ORIGINAL): MANUAL BARCODING FORM (Type-to-Filter Karigar + Purana System) ===
+  // === VIEW 4: MANUAL BARCODING FORM (Create + Edit Mode) ===
+  const isEdit = !!(bcState.editId && bcState.origLog);
+  const oLog = bcState.origLog;
+
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
-        <h2>4. Barcoding (Manual Single Entry & Sticker Print)</h2>
+        <h2>${isEdit ? '✏️ Edit Barcoding Entry' : '4. Barcoding (Manual Single Entry & Sticker Print)'}</h2>
+        ${isEdit ? `<button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Cancel Edit</button>` : ''}
       </div>
       ${getBarcodeTopNavHtml(designs.length)}
 
@@ -443,13 +465,13 @@ async function renderBarcodeModule() {
         ⚠️ Pehle <b>⚙️ Settings</b> me Firm Code (KT / IF) add karein!
       </div>` : ''}
 
-      <div class="grid-2">
-        <div><label>Date</label><input type="date" id="bcDate" value="${todayISO()}" /></div>
+      <div class="grid-2" style="align-items:start;">
+        <div><label>Date</label><input type="date" id="bcDate" value="${isEdit ? esc(oLog.date) : todayISO()}" /></div>
         ${buildSourcePickerHtml('bc', 'Kahan se Saree Leni Hai (Karigar Type Karein) *')}
 
         <div>
           <label>Design / Saree Name * (e.g. RASHMIKA, 1020)</label>
-          <input id="bcDesignName" list="bcDesignList" placeholder="e.g. RASHMIKA" oninput="onBCDesignInput()" />
+          <input id="bcDesignName" list="bcDesignList" value="${isEdit ? esc(oLog.designName) : ''}" placeholder="e.g. RASHMIKA" oninput="onBCDesignInput()" />
           <datalist id="bcDesignList">
             ${designs.map((d) => `<option value="${esc(d.designName)}">`).join('')}
           </datalist>
@@ -457,19 +479,19 @@ async function renderBarcodeModule() {
 
         <div>
           <label>Quality / Top Line (Sticker ke upar)</label>
-          <input id="bcSpecLine" placeholder="e.g. 3.60 CM EMB JHALAR" oninput="updateStickerPreview()" />
+          <input id="bcSpecLine" value="${isEdit ? esc(oLog.specLine || '') : ''}" placeholder="e.g. 3.60 CM EMB JHALAR" oninput="updateStickerPreview()" />
         </div>
 
         <div>
           <label>Firm Short Code * (KT / IF)</label>
           <select id="bcFirmCode" onchange="updateStickerPreview()">
-            ${firms.map((f) => `<option value="${esc(f.shortCode)}">${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
+            ${firms.map((f) => `<option value="${esc(f.shortCode)}" ${isEdit && oLog.firmCode === f.shortCode ? 'selected' : ''}>${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
           </select>
         </div>
 
         <div>
           <label>Quantity (Pcs & Stickers) *</label>
-          <input type="number" id="bcQty" min="1" placeholder="e.g. 20" />
+          <input type="number" id="bcQty" min="1" value="${isEdit ? oLog.qty : ''}" placeholder="e.g. 20" />
         </div>
 
         <div>
@@ -492,14 +514,21 @@ async function renderBarcodeModule() {
       </div>
 
       <button type="button" class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveAndPrintBarcoding()">
-        🏷️ Save Stock Convert & Print Stickers (Ctrl+S)
+        ${isEdit ? '✅ Update Barcoding & Sync Stock (Ctrl+S)' : '🏷️ Save Stock Convert & Print Stickers (Ctrl+S)'}
       </button>
     </div>
   `;
 
+  if (isEdit) {
+    const match = bcSourceListCache.find((s) => s.value === oLog.sourceName);
+    document.getElementById('bcSource').value = oLog.sourceName;
+    document.getElementById('bcSourceSearch').value = match ? match.label : (oLog.sourceName === _BC_POOL ? 'JOB WORK WAPAS POOL' : oLog.sourceName);
+    document.getElementById('bcSourceAvlHint').textContent = match ? `✓ Available (with edit): ${match.qty} Pcs` : '';
+  }
+
   setTimeout(() => {
     updateStickerPreview();
-    document.getElementById('bcSourceSearch')?.focus();
+    document.getElementById(isEdit ? 'bcQty' : 'bcSourceSearch')?.focus();
   }, 80);
 }
 
@@ -618,9 +647,7 @@ async function saveStockConvertBatch() {
     if (!bcState.convertRows.length) {
       const desVal = document.getElementById('scDesignName')?.value.trim();
       const srcVal = document.getElementById('scSource')?.value || document.getElementById('scSourceSearch')?.value.trim();
-      if (srcVal && desVal) {
-        await addStockConvertRow();
-      }
+      if (srcVal && desVal) await addStockConvertRow();
     }
     if (!bcState.convertRows.length) return alert('Convert List khali hai! Kam se kam 1 entry add karein.');
 
@@ -628,9 +655,7 @@ async function saveStockConvertBatch() {
     const printMode = document.getElementById('scPrintMode')?.value || 'THERMAL';
 
     const neededMap = {};
-    bcState.convertRows.forEach((r) => {
-      neededMap[r.sourceName] = (neededMap[r.sourceName] || 0) + r.qty;
-    });
+    bcState.convertRows.forEach((r) => { neededMap[r.sourceName] = (neededMap[r.sourceName] || 0) + r.qty; });
     for (const srcName of Object.keys(neededMap)) {
       const st = await dbGet('bunkarStock', srcName);
       const avail = st ? st.qty : 0;
@@ -642,14 +667,6 @@ async function saveStockConvertBatch() {
     let totalQty = 0;
     const printItems = [];
     for (const r of bcState.convertRows) {
-      const src = await dbGet('bunkarStock', r.sourceName);
-      const avail = src ? src.qty : 0;
-      await dbPut('bunkarStock', {
-        bunkarName: r.sourceName,
-        qty: Math.max(0, avail - r.qty),
-        updatedAt: new Date().toISOString()
-      });
-
       const exDes = await dbGet('designs', r.designName);
       await dbPut('designs', {
         designName: r.designName,
@@ -657,29 +674,10 @@ async function saveStockConvertBatch() {
         createdAt: exDes ? exDes.createdAt : Date.now()
       });
 
-      const barcodeVal = `${r.designName} ${r.firmCode}`;
-      const skuKey = `${r.designName}__${r.firmCode}`;
-      const curReady = await dbGet('readyStock', skuKey);
-      await dbPut('readyStock', {
-        skuKey,
-        designName: r.designName,
-        firmCode: r.firmCode,
-        specLine: r.specLine || (curReady ? curReady.specLine : ''),
-        barcodeVal,
-        qty: (curReady ? curReady.qty : 0) + r.qty,
-        updatedAt: new Date().toISOString()
-      });
-
       await dbPut('barcodingLogs', {
-        date,
-        mode: 'STOCK_CONVERT',
-        sourceName: r.sourceName,
-        designName: r.designName,
-        firmCode: r.firmCode,
-        specLine: r.specLine,
-        barcodeVal,
-        qty: r.qty,
-        createdAt: Date.now()
+        date, mode: 'STOCK_CONVERT', sourceName: r.sourceName,
+        designName: r.designName, firmCode: r.firmCode, specLine: r.specLine,
+        barcodeVal: `${r.designName} ${r.firmCode}`, qty: r.qty, createdAt: Date.now()
       });
 
       saveKarigarDesignMap(r.sourceName, r.designName);
@@ -687,6 +685,7 @@ async function saveStockConvertBatch() {
       printItems.push({ ...r });
     }
 
+    if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     bcState.convertRows = [];
     if (typeof refreshDashboard === 'function') await refreshDashboard();
 
@@ -694,9 +693,7 @@ async function saveStockConvertBatch() {
       await printBatchBarcodeStickers(printItems, printMode);
     }
     renderBarcodeModule();
-  } catch (err) {
-    alert('Stock Convert Error: ' + err.message);
-  }
+  } catch (err) { alert('Stock Convert Error: ' + err.message); }
 }
 
 async function printBatchBarcodeStickers(items, mode) {
@@ -741,11 +738,10 @@ async function printBatchBarcodeStickers(items, mode) {
       window.JsBarcode(svg, codeVal, { format: 'CODE128', width: 1.4, height: 28, displayValue: false, margin: 0 });
     });
   }
-
   setTimeout(() => window.print(), 200);
 }
 
-// === ORIGINAL MANUAL BARCODING FUNCTIONS ===
+// === MANUAL BARCODING FUNCTIONS ===
 async function onBCDesignInput() {
   const name = document.getElementById('bcDesignName').value.trim().toUpperCase();
   const d = name ? await dbGet('designs', name) : null;
@@ -780,6 +776,15 @@ async function updateStickerPreview() {
   }
 }
 
+async function editBarcodingLog(id) {
+  const l = await dbGet('barcodingLogs', id);
+  if (!l) return;
+  bcState.editId = l.id;
+  bcState.origLog = l;
+  bcState.view = 'FORM';
+  renderBarcodeModule();
+}
+
 async function saveAndPrintBarcoding() {
   try {
     const date = document.getElementById('bcDate').value || todayISO();
@@ -797,22 +802,16 @@ async function saveAndPrintBarcoding() {
     const qty = parseInt(document.getElementById('bcQty').value, 10);
     const printMode = document.getElementById('bcPrintMode').value;
 
-    if (!sourceName) {
-      srcSearchEl?.focus();
-      return alert('Pehle list me se Karigar / Source chunein!');
-    }
+    if (!sourceName) { srcSearchEl?.focus(); return alert('Pehle list me se Karigar / Source chunein!'); }
     if (!designName) return alert('Design Name daalein!');
     if (!firmCode) return alert('Settings me Firm Code add karein!');
     if (!qty || qty <= 0) return alert('Sahi Quantity daalein!');
 
     const src = await dbGet('bunkarStock', sourceName);
-    const avail = src ? src.qty : 0;
+    const isEdit = !!(bcState.editId && bcState.origLog);
+    const editExtra = (isEdit && bcState.origLog.sourceName === sourceName) ? (Number(bcState.origLog.qty) || 0) : 0;
+    const avail = (src ? src.qty : 0) + editExtra;
     if (qty > avail) return alert(`Is source me sirf ${avail} Pcs bache hain!`);
-
-    const barcodeVal = `${designName} ${firmCode}`;
-    const skuKey = `${designName}__${firmCode}`;
-
-    await dbPut('bunkarStock', { bunkarName: sourceName, qty: avail - qty, updatedAt: new Date().toISOString() });
 
     const exDes = await dbGet('designs', designName);
     await dbPut('designs', {
@@ -821,22 +820,26 @@ async function saveAndPrintBarcoding() {
       createdAt: exDes ? exDes.createdAt : Date.now()
     });
 
-    const curReady = await dbGet('readyStock', skuKey);
-    await dbPut('readyStock', {
-      skuKey, designName, firmCode, specLine, barcodeVal,
-      qty: (curReady ? curReady.qty : 0) + qty,
-      updatedAt: new Date().toISOString()
-    });
+    const barcodeVal = `${designName} ${firmCode}`;
+    const logPayload = {
+      date,
+      mode: isEdit ? (bcState.origLog.mode || 'MANUAL') : 'MANUAL',
+      sourceName, designName, firmCode, specLine, barcodeVal, qty,
+      createdAt: isEdit ? bcState.origLog.createdAt : Date.now()
+    };
+    if (isEdit) logPayload.id = bcState.editId;
 
-    await dbPut('barcodingLogs', {
-      date, mode: 'MANUAL', sourceName, designName, firmCode, specLine, barcodeVal, qty, createdAt: Date.now()
-    });
-
+    await dbPut('barcodingLogs', logPayload);
+    if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
 
-    if (confirm(`✅ ${qty} Pcs "${barcodeVal}" Ready Stock me jud gayi!\nKya abhi ${qty} Stickers Print karne hain?`)) {
+    if (confirm(`✅ ${qty} Pcs "${barcodeVal}" ${isEdit ? 'Update' : 'Save'} ho gayi!\nKya abhi ${qty} Stickers Print karne hain?`)) {
       await printBarcodeStickers(specLine, designName, firmCode, qty, printMode);
     }
+
+    bcState.editId = null;
+    bcState.origLog = null;
+    if (isEdit) bcState.view = 'HISTORY';
     renderBarcodeModule();
   } catch (err) { alert('Barcoding Error: ' + err.message); }
 }
@@ -850,6 +853,15 @@ async function addNewDesignPrompt() {
   if (!name || !name.trim()) return;
   const spec = prompt('Quality / Top Line (e.g. 3.60 CM EMB JHALAR):') || '';
   await dbPut('designs', { designName: name.trim().toUpperCase(), specLine: spec.trim().toUpperCase(), createdAt: Date.now() });
+  renderBarcodeModule();
+}
+
+async function editDesignSpec(designName) {
+  const d = await dbGet('designs', designName);
+  if (!d) return;
+  const newSpec = prompt(`"${designName}" ki Quality / Top Line update karein:`, d.specLine || '');
+  if (newSpec === null) return;
+  await dbPut('designs', { ...d, specLine: newSpec.trim().toUpperCase() });
   renderBarcodeModule();
 }
 
@@ -873,17 +885,10 @@ async function reverseBarcodingLog(id) {
   try {
     const l = await dbGet('barcodingLogs', id);
     if (!l) return;
-    if (!confirm(`Kya "${l.designName} ${l.firmCode}" (${l.qty} Pcs) ki Barcoding delete karke wapas source stock me dalna hai?`)) return;
-
-    const skuKey = `${l.designName}__${l.firmCode}`;
-    const ready = await dbGet('readyStock', skuKey);
-    if (ready) {
-      await dbPut('readyStock', { ...ready, qty: Math.max(0, ready.qty - l.qty), updatedAt: new Date().toISOString() });
-    }
-    const src = await dbGet('bunkarStock', l.sourceName);
-    await dbPut('bunkarStock', { bunkarName: l.sourceName, qty: (src ? src.qty : 0) + l.qty, updatedAt: new Date().toISOString() });
+    if (!confirm(`Kya "${l.designName} ${l.firmCode}" (${l.qty} Pcs) ki Barcoding delete karke Stock dobara calculate karna hai?`)) return;
 
     await dbDelete('barcodingLogs', id);
+    if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
     renderBarcodeModule();
   } catch (err) { alert('Reverse Error: ' + err.message); }
