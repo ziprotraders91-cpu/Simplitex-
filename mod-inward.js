@@ -1,8 +1,13 @@
-// === SimpliTex Module 1 & 2 v4 (Edit Everywhere + Auto Stock Engine + Aligned + A5 Bill + LAN Mode Safe) ===
+// === SimpliTex Module 1 & 2 v5 (Pro UI: Toast/Modal + 2-Card Clean Layout + Edit Everywhere + LAN Mode Safe) ===
 
 const _JW_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
 let jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, autoJobWorkNo: null, editId: null, origCreatedAt: null, origQtyMap: {} };
 let inState = { step: 'MENU', jwType: '', worker: null, editId: null, editOrig: null, returnTo: '' };
+
+function jwNotify(msg, type = 'info') {
+  if (typeof window.stxToast === 'function') window.stxToast(msg, type);
+  else alert(msg);
+}
 
 function esc(str) {
   return String(str || '').replace(/[&<>"']/g, (m) => ({
@@ -196,7 +201,7 @@ async function renderJWOutward() {
           <h2>${esc(jwState.jwType)} — Worker Chunein</h2>
           <div><button class="btn btn-success btn-sm" onclick="showAddWorkerModal('out')">+ Naya Worker</button><button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button></div>
         </div>
-        <div id="addWorkerInlineOut" class="hidden" style="background:#f9fafb; border:1px solid #d1d5db; padding:12px; border-radius:8px; margin-bottom:12px;">
+        <div id="addWorkerInlineOut" class="hidden" style="background:#f8fafc; border:1px solid #cbd5e1; padding:12px; border-radius:10px; margin-bottom:12px;">
           <input type="hidden" id="editWorkerIdOut" value="" />
           <div class="grid-2" style="align-items:start;">
             <div><label>Worker / Party Naam *</label><input id="newWNameOut" placeholder="e.g. G.K. Fabrics" /></div>
@@ -217,14 +222,14 @@ async function renderJWOutward() {
         const p = pendList.find((x) => x.id === `${w.name}__${jwState.jwType.toUpperCase()}`);
         const pQty = p ? p.qty : 0;
         return `<div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickOutWorker(${w.id})">
-          <div><div>${gIdx + 1}. ${esc(w.name)}</div><small style="color:#6b7280; font-weight:400;">${esc(w.phone || '')} ${esc(w.city || w.address || '')}</small></div>
+          <div><div>${gIdx + 1}. ${esc(w.name)}</div><small style="color:#64748b; font-weight:500;">${esc(w.phone || '')} ${esc(w.city || w.address || '')}</small></div>
           <div style="display:flex; align-items:center; gap:6px;">
-            <span class="badge" style="color:${pQty > 0 ? '#b91c1c' : '#15803d'};">Pending: ${pQty}</span>
-            <button type="button" class="btn btn-light btn-sm" onclick="event.stopPropagation(); editWorkerInline(${w.id}, 'out')">✏️</button>
-            <button type="button" class="btn btn-light btn-sm" onclick="event.stopPropagation(); openWorkerPassbook(${w.id})">📜 Khata</button>
+            <span class="badge" style="color:${pQty > 0 ? '#dc2626' : '#16a34a'};">Pending: ${pQty}</span>
+            <button type="button" class="btn btn-light btn-sm" title="Edit Worker" onclick="event.stopPropagation(); editWorkerInline(${w.id}, 'out')">✏️</button>
+            <button type="button" class="btn btn-light btn-sm" title="Worker Khata" onclick="event.stopPropagation(); openWorkerPassbook(${w.id})">📜 Khata</button>
           </div></div>`;
       },
-      emptyHtml: '<p style="color:#6b7280; font-size:13px;">Koi worker nahi mila. Upar "+ Naya Worker" dabaa kar jodein.</p>'
+      emptyHtml: '<p style="color:#64748b; font-size:13px;">Koi worker nahi mila. Upar "+ Naya Worker" dabaa kar jodein.</p>'
     });
     return;
   }
@@ -240,7 +245,7 @@ async function renderJWOutward() {
     box.innerHTML = `
       <div class="card">
         <div class="card-head"><h2>📜 ${esc(wName)} (${esc(jwState.jwType)}) — Poora Khata</h2><button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button></div>
-        <div style="background:#fef2f2; border:1px solid #fecaca; padding:10px 14px; border-radius:8px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;"><span>Abhi Total Pending:</span><b style="font-size:18px; color:#b91c1c;">${pend ? pend.qty : 0} Pcs</b></div>
+        <div style="background:#fef2f2; border:1px solid #fecaca; padding:10px 14px; border-radius:10px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;"><span>Abhi Total Pending:</span><b style="font-size:18px; color:#dc2626;">${pend ? pend.qty : 0} Pcs</b></div>
         <div id="jwPassbookPager"></div>
       </div>`;
     mountPagedList({
@@ -252,15 +257,15 @@ async function renderJWOutward() {
         const isOut = l.direction === 'OUT';
         const detail = isOut && Array.isArray(l.batchItems) ? l.batchItems.map((b) => `${b.bunkarName === _JW_POOL ? 'POOL' : b.bunkarName} (${b.qty})`).join(', ') : 'Total Wapsi Entry';
         return `<tr>
-          <td style="white-space:nowrap;">${esc(l.date)}${l.jobWorkNo ? `<br/><small>#${esc(l.jobWorkNo)}</small>` : ''}</td>
-          <td><b style="color:${isOut ? '#1d4ed8' : '#15803d'};">${isOut ? '📤 Bheja (OUT)' : '📥 Wapas (IN)'}</b></td>
+          <td style="white-space:nowrap;">${esc(l.date)}${l.jobWorkNo ? `<br/><small style="color:#64748b;">#${esc(l.jobWorkNo)}</small>` : ''}</td>
+          <td><b style="color:${isOut ? '#2563eb' : '#16a34a'};">${isOut ? '📤 Bheja' : '📥 Wapas'}</b></td>
           <td><small>${esc(detail)}</small></td>
           <td><b>${isOut ? '+' : '-'}${l.qty}</b></td>
           <td><small><b>${esc(l.note || '-')}</b></small></td>
           <td style="white-space:nowrap;">
-            ${isOut ? `<button class="btn btn-dark btn-sm" onclick="printJobWorkBill(${l.id})">🖨️ A5</button>` : ''}
-            <button class="btn btn-light btn-sm" onclick="${isOut ? `editLedgerOut(${l.id})` : `editLedgerIn(${l.id}, 'PASSBOOK')`}">✏️ Edit</button>
-            <button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${l.id}, 'PASSBOOK')">↩️ Del</button>
+            ${isOut ? `<button class="btn btn-dark btn-sm" title="A5 Bill" onclick="printJobWorkBill(${l.id})">🖨️ A5</button>` : ''}
+            <button class="btn btn-light btn-sm" title="Edit" onclick="${isOut ? `editLedgerOut(${l.id})` : `editLedgerIn(${l.id}, 'PASSBOOK')`}">✏️</button>
+            <button class="btn btn-danger btn-sm" title="Delete" onclick="reverseLedgerEntry(${l.id}, 'PASSBOOK')">🗑️</button>
           </td></tr>`;
       },
       emptyHtml: '<tr><td colspan="6">Is worker ka abhi koi record nahi hai</td></tr>'
@@ -292,10 +297,10 @@ async function renderJWOutward() {
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>${isEdit ? '✏️ Edit Job Work' : esc(jwState.jwType)} → ${esc(jwState.worker.name)} (${isEdit ? '#' + esc(m.jobWorkNo) : 'Batch & A5 Bill'})</h2>
+          <h2>${isEdit ? '✏️ Edit Job Work' : esc(jwState.jwType)} → ${esc(jwState.worker.name)} (${isEdit ? '#' + esc(m.jobWorkNo) : 'Bill Details'})</h2>
           <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
         </div>
-        <div class="grid-2" style="margin-bottom:10px; align-items:start;">
+        <div class="grid-2" style="align-items:start;">
           <div><label>Firm Chunein *</label><select id="batchFirmId" onchange="syncBatchMeta()">${firms.length ? firms.map((f) => `<option value="${f.id}" ${Number(m.firmId) === f.id ? 'selected' : ''}>${esc(f.name)} (${esc(f.shortCode)})</option>`).join('') : '<option value="">Settings me Firm add karein</option>'}</select></div>
           <div><label>Job Work No. *</label><input type="number" id="batchBillNo" value="${esc(m.jobWorkNo)}" onchange="syncBatchMeta()" /></div>
           <div><label>Dated *</label><input type="date" id="batchDate" value="${esc(m.date)}" onchange="syncBatchMeta()" /></div>
@@ -303,19 +308,29 @@ async function renderJWOutward() {
           <div><label>Destination (City)</label><input id="batchDestination" value="${esc(m.destination)}" placeholder="e.g. VARANASI" onchange="syncBatchMeta()" /></div>
           <div><label>✨ Kya Kaam / Design Hoga? *</label><input id="batchNote" list="jwWorkDetailList" value="${esc(m.note)}" placeholder="e.g. GAWATI ZARI CONTRAST ANCHAL" oninput="syncBatchMeta()" /><datalist id="jwWorkDetailList">${savedWorks.map((w) => `<option value="${esc(w)}">`).join('')}</datalist></div>
         </div>
-        <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:10px; border-radius:8px; margin-bottom:10px;">
-          <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:6px;">Batch Me Bunkar Saree Jodein (Enter = Aage):</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>📦 Batch Me Bunkar Saree Jodein</h2>
+          <span class="shortcut-hint">Enter = Aage</span>
+        </div>
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; padding:12px; border-radius:10px; margin-bottom:12px;">
           <div class="grid-2" style="align-items:start;">
             <div><label>Description of Goods (Bunkar Naam)</label><input id="batchBunkarInput" list="batchBunkarList" placeholder="e.g. MOHAMMAD ANAS, FARHAN" /><datalist id="batchBunkarList">${stocks.map((s) => `<option value="${esc(s.bunkarName)}">${esc(s.bunkarName === _JW_POOL ? 'JOB WORK POOL' : s.bunkarName)} (${s.qty} Pcs)</option>`).join('')}</datalist></div>
             <div><label>Quantity (Pcs) — Enter se Add hoga</label><input type="number" id="batchQtyInput" min="1" placeholder="e.g. 16" data-custom-enter="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); addBatchRow(); }" /></div>
           </div>
-          <button type="button" class="btn btn-dark btn-sm" style="margin-top:8px;" onclick="addBatchRow()">+ Add Line</button>
+          <button type="button" class="btn btn-dark btn-sm" style="margin-top:10px;" onclick="addBatchRow()">+ Add Line</button>
         </div>
-        <table><thead><tr><th>Sl No.</th><th>Description of Goods (Bunkar)</th><th>Quantity</th><th>X</th></tr></thead>
-          <tbody>${jwState.batchRows.map((r, i) => `<tr><td>${i + 1}</td><td><b>${esc(r.bunkarName === _JW_POOL ? 'JOB WORK POOL' : r.bunkarName)}</b></td><td><b>${r.qty}</b></td><td><button class="btn btn-danger btn-sm" onclick="removeBatchRow(${i})">X</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:#6b7280;">Abhi batch khali hai... upar se add karein</td></tr>'}</tbody>
-        </table>
-        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-top:14px;">
-          <div style="font-size:18px; font-weight:800;">TOTAL: <span style="color:#1d4ed8;">${totalBatch} Pcs</span></div>
+
+        <div style="overflow-x:auto;">
+          <table><thead><tr><th>Sl No.</th><th>Description of Goods (Bunkar)</th><th>Quantity</th><th>X</th></tr></thead>
+            <tbody>${jwState.batchRows.map((r, i) => `<tr><td>${i + 1}</td><td><b>${esc(r.bunkarName === _JW_POOL ? 'JOB WORK POOL' : r.bunkarName)}</b></td><td><b>${r.qty}</b></td><td><button class="btn btn-danger btn-sm" onclick="removeBatchRow(${i})">X</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:#64748b;">Abhi batch khali hai... upar se add karein</td></tr>'}</tbody>
+          </table>
+        </div>
+
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; margin-top:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+          <div style="font-size:18px; font-weight:800;">TOTAL: <span style="color:#2563eb;">${totalBatch} Pcs</span></div>
           <button type="button" class="btn btn-success primary-save-btn" onclick="saveBatchOutward()">${isEdit ? '✅ Update Batch & Sync Stock (Ctrl+S)' : '✅ Save Batch & Print A5 Bill (Ctrl+S)'}</button>
         </div>
       </div>`;
@@ -394,16 +409,48 @@ async function saveNewWorker(mode) {
     const city = (document.getElementById('newWCity' + pfx)?.value || '').trim().toUpperCase();
     const transport = (document.getElementById('newWTrans' + pfx)?.value || '').trim();
     const jwType = mode === 'out' ? jwState.jwType : inState.jwType;
-    if (!name) return alert('Worker ka naam zaroori hai!');
+    if (!name) return jwNotify('Worker ka naam zaroori hai!', 'warn');
     const payload = { name, phone, address, city, transport, jobWorkType: jwType.toUpperCase() };
     if (editIdVal) payload.id = Number(editIdVal);
     await dbPut('jobWorkers', payload);
+    jwNotify('✅ Worker save ho gaya!', 'success');
     mode === 'out' ? renderJWOutward() : renderStockInward();
-  } catch (err) { alert('Save Error: ' + err.message); }
+  } catch (err) { jwNotify('Save Error: ' + err.message, 'error'); }
 }
 
 async function addJobWorkTypePrompt(mode) {
-  const name = prompt('Naye Job Work ka naam likhein (e.g. Dying, Cutting, Stone):');
+  if (typeof window.stxOpenModal === 'function') {
+    window.stxOpenModal({
+      title: '+ Naya Job Work Add Karein',
+      bodyHtml: `
+        <label>Kaam ka naam likhein (e.g. Dying, Cutting, Stone)</label>
+        <input id="stxNewJWTypeInput" placeholder="e.g. Dying"
+               onkeydown="if(event.key==='Enter'){ event.preventDefault(); document.getElementById('stxSaveJWTypeBtn')?.click(); }" />
+      `,
+      buttons: [
+        { label: 'Cancel', className: 'btn btn-light', onClick: () => stxCloseModal() },
+        {
+          label: '✅ Save',
+          className: 'btn btn-success',
+          onClick: async () => {
+            const name = document.getElementById('stxNewJWTypeInput')?.value.trim();
+            if (!name) return jwNotify('Kaam ka naam likhein!', 'warn');
+            await dbPut('jobWorkTypes', { name });
+            stxCloseModal();
+            jwNotify(`✅ "${name}" add ho gaya!`, 'success');
+            mode === 'out' ? renderJWOutward() : renderStockInward();
+          }
+        }
+      ]
+    });
+    setTimeout(() => {
+      const btns = document.querySelectorAll('#stxModalActions button');
+      if (btns[1]) btns[1].id = 'stxSaveJWTypeBtn';
+      document.getElementById('stxNewJWTypeInput')?.focus();
+    }, 40);
+    return;
+  }
+  const name = prompt('Naye Job Work ka naam likhein:');
   if (!name || !name.trim()) return;
   await dbPut('jobWorkTypes', { name: name.trim() });
   mode === 'out' ? renderJWOutward() : renderStockInward();
@@ -415,12 +462,12 @@ async function addBatchRow() {
   const qInput = document.getElementById('batchQtyInput');
   const bunkarName = bInput.value.trim().toUpperCase();
   const qty = parseInt(qInput.value, 10);
-  if (!bunkarName) { bInput.focus(); return alert('Bunkar ka naam daalein!'); }
-  if (!qty || qty <= 0) { qInput.focus(); return alert('Sahi Pcs daalein!'); }
+  if (!bunkarName) { bInput.focus(); return jwNotify('Bunkar ka naam daalein!', 'warn'); }
+  if (!qty || qty <= 0) { qInput.focus(); return jwNotify('Sahi Pcs daalein!', 'warn'); }
   const st = await dbGet('bunkarStock', bunkarName);
   const avail = (st ? st.qty : 0) + ((jwState.origQtyMap && jwState.origQtyMap[bunkarName]) || 0);
   const alreadyAdded = jwState.batchRows.filter((r) => r.bunkarName === bunkarName).reduce((s, r) => s + r.qty, 0);
-  if (alreadyAdded + qty > avail) return alert(`Dukan me ${bunkarName} ki sirf ${avail} saree hai (abhi tak ${alreadyAdded} add ho chuki)!`);
+  if (alreadyAdded + qty > avail) return jwNotify(`Dukan me ${bunkarName} ki sirf ${avail} saree hai!`, 'warn');
   jwState.batchRows.push({ bunkarName, qty });
   bInput.value = ''; qInput.value = '';
   await renderJWOutward();
@@ -434,19 +481,14 @@ function removeBatchRow(idx) {
 async function saveBatchOutward() {
   try {
     syncBatchMeta();
-    if (!jwState.batchRows.length) return alert('Batch khali hai! Kam se kam 1 saree add karein.');
+    if (!jwState.batchRows.length) return jwNotify('Batch khali hai! Kam se kam 1 saree add karein.', 'warn');
     const m = jwState.meta;
 
-    // Multi-PC Guard: Agar user ne auto-number hi rakha hai aur dusre PC par wo number ban chuka hai toh fresh number lein
     if (!jwState.editId && jwState.autoJobWorkNo && String(m.jobWorkNo) === String(jwState.autoJobWorkNo)) {
       const freshNo = await getNextJobWorkNoFast();
       if (freshNo > Number(m.jobWorkNo)) m.jobWorkNo = freshNo;
     }
 
-    if (!m.note) {
-      const entered = prompt('Bill ke neeche kya kaam print karna hai? (e.g. GAWATI ZARI CONTRAST ANCHAL)');
-      if (entered && entered.trim()) m.note = entered.trim().toUpperCase();
-    }
     if (m.note) rememberWorkDetail(m.note);
     const jwTypeUpper = jwState.jwType.toUpperCase();
     const workerName = jwState.worker.name.toUpperCase();
@@ -463,12 +505,26 @@ async function saveBatchOutward() {
     const ledgerId = await dbPut('jobWorkLedger', record);
     if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
+
     const wasEdit = !!jwState.editId;
-    if (confirm(`📤 Job Work #${m.jobWorkNo} (${totalQty} Pcs) ${wasEdit ? 'Update' : 'Save'} ho gaya!\nKya abhi Half-A4 (A5) Bill Print karna hai?`)) await printJobWorkBill(ledgerId);
+    const savedNo = m.jobWorkNo;
     if (wasEdit) { jwState.step = 'PASSBOOK'; jwState.editId = null; jwState.origQtyMap = {}; jwState.meta = null; jwState.autoJobWorkNo = null; }
     else { jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null, autoJobWorkNo: null, editId: null, origCreatedAt: null, origQtyMap: {} }; }
-    renderJWOutward();
-  } catch (err) { alert('Save Error: ' + err.message); }
+    await renderJWOutward();
+
+    if (typeof window.stxOpenModal === 'function') {
+      window.stxOpenModal({
+        title: `📤 Job Work #${savedNo} ${wasEdit ? 'Update' : 'Save'} Ho Gaya!`,
+        bodyHtml: `<div style="font-size:14px;"><b>${esc(workerName)}</b> (${esc(jwTypeUpper)}) — <b>${totalQty} Pcs</b></div>`,
+        buttons: [
+          { label: '🖨️ Print A5 Bill', className: 'btn btn-dark', onClick: () => { stxCloseModal(); printJobWorkBill(ledgerId); } },
+          { label: 'Done', className: 'btn btn-success', onClick: () => stxCloseModal() }
+        ]
+      });
+    } else {
+      jwNotify(`Job Work #${savedNo} Save ho gaya!`, 'success');
+    }
+  } catch (err) { jwNotify('Save Error: ' + err.message, 'error'); }
 }
 
 async function printJobWorkBill(ledgerId) {
@@ -540,11 +596,11 @@ async function renderStockInward() {
         const isDirect = l.jobWorkType === 'DIRECT_BAITHAK';
         return `<tr>
           <td style="white-space:nowrap;">${esc(l.date)}</td>
-          <td><b>${isDirect ? '🏠 Direct Baithak' : '🧵 ' + esc(l.jobWorkType)}</b></td>
+          <td><b>${isDirect ? '🏠 Baithak' : '🧵 ' + esc(l.jobWorkType)}</b></td>
           <td><b>${esc(isDirect ? l.bunkarName : l.workerName)}</b></td>
-          <td><b style="color:#15803d;">+${l.qty}</b></td>
+          <td><b style="color:#16a34a;">+${l.qty}</b></td>
           <td><small>${esc(l.note || '-')}</small></td>
-          <td style="white-space:nowrap;"><button class="btn btn-light btn-sm" onclick="editLedgerIn(${l.id}, 'INWARD_HIST')">✏️ Edit</button> <button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${l.id}, 'INWARD_HIST')">↩️ Del</button></td>
+          <td style="white-space:nowrap;"><button class="btn btn-light btn-sm" title="Edit" onclick="editLedgerIn(${l.id}, 'INWARD_HIST')">✏️</button> <button class="btn btn-danger btn-sm" title="Delete" onclick="reverseLedgerEntry(${l.id}, 'INWARD_HIST')">🗑️</button></td>
         </tr>`;
       },
       emptyHtml: '<tr><td colspan="6">Koi record nahi mila</td></tr>'
@@ -564,7 +620,7 @@ async function renderStockInward() {
           <div><label>Quantity (Pcs) *</label><input type="number" id="dirQty" min="1" value="${orig ? orig.qty : ''}" placeholder="e.g. 50" /></div>
           <div><label>Note (Optional)</label><input id="dirNote" value="${esc(orig ? (orig.note || '') : '')}" placeholder="e.g. Kora maal" data-custom-enter="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveDirectInward(); }" /></div>
         </div>
-        <button class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveDirectInward()">${isEdit ? '✅ Update Direct Inward & Sync Stock (Ctrl+S)' : '✅ Save Direct Inward (Ctrl+S)'}</button>
+        <button class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%; height:44px;" onclick="saveDirectInward()">${isEdit ? '✅ Update Direct Inward & Sync Stock (Ctrl+S)' : '✅ Save Direct Inward (Ctrl+S)'}</button>
       </div>`;
     setTimeout(() => document.getElementById('dirBunkar')?.focus(), 50);
     return;
@@ -587,7 +643,7 @@ async function renderStockInward() {
     box.innerHTML = `
       <div class="card">
         <div class="card-head"><h2>${esc(inState.jwType)} Wapsi — Worker Chunein</h2><div><button class="btn btn-success btn-sm" onclick="showAddWorkerModal('in')">+ Naya Worker</button><button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button></div></div>
-        <div id="addWorkerInlineIn" class="hidden" style="background:#f9fafb; border:1px solid #d1d5db; padding:12px; border-radius:8px; margin-bottom:12px;">
+        <div id="addWorkerInlineIn" class="hidden" style="background:#f8fafc; border:1px solid #cbd5e1; padding:12px; border-radius:10px; margin-bottom:12px;">
           <input type="hidden" id="editWorkerIdIn" value="" />
           <div class="grid-2" style="align-items:start;">
             <div><label>Worker Naam *</label><input id="newWNameIn" placeholder="e.g. G.K. Fabrics" /></div>
@@ -604,9 +660,9 @@ async function renderStockInward() {
       renderRow: (w, gIdx, pageIdx) => {
         const p = pendList.find((x) => x.id === `${w.name}__${inState.jwType.toUpperCase()}`);
         const pQty = p ? p.qty : 0;
-        return `<div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickInWorker(${w.id})"><span>${gIdx + 1}. ${esc(w.name)}</span><div style="display:flex; align-items:center; gap:6px;"><span class="badge" style="color:${pQty > 0 ? '#b91c1c' : '#15803d'};">Pending: ${pQty} Pcs</span><button type="button" class="btn btn-light btn-sm" onclick="event.stopPropagation(); editWorkerInline(${w.id}, 'in')">✏️</button></div></div>`;
+        return `<div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickInWorker(${w.id})"><span>${gIdx + 1}. ${esc(w.name)}</span><div style="display:flex; align-items:center; gap:6px;"><span class="badge" style="color:${pQty > 0 ? '#dc2626' : '#16a34a'};">Pending: ${pQty} Pcs</span><button type="button" class="btn btn-light btn-sm" onclick="event.stopPropagation(); editWorkerInline(${w.id}, 'in')">✏️</button></div></div>`;
       },
-      emptyHtml: '<p style="color:#6b7280; font-size:13px;">Koi worker nahi mila.</p>'
+      emptyHtml: '<p style="color:#64748b; font-size:13px;">Koi worker nahi mila.</p>'
     });
     return;
   }
@@ -619,13 +675,13 @@ async function renderStockInward() {
     box.innerHTML = `
       <div class="card">
         <div class="card-head"><h2>${isEdit ? '✏️ Edit Wapsi:' : ''} ${esc(inState.jwType)} → ${esc(inState.worker.name)} (Wapsi)</h2><button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button></div>
-        <div style="background:#fef2f2; border:1px solid #fecaca; padding:12px; border-radius:8px; margin-bottom:12px; font-size:15px;">Is Karigar par Total Pending: <b style="color:#b91c1c;">${pendQty} Pcs</b></div>
+        <div style="background:#fef2f2; border:1px solid #fecaca; padding:12px; border-radius:10px; margin-bottom:12px; font-size:15px;">Is Karigar par Total Pending: <b style="color:#dc2626;">${pendQty} Pcs</b></div>
         <div class="grid-2" style="align-items:start;">
           <div><label>Date</label><input type="date" id="jwRetDate" value="${esc(orig ? orig.date : todayISO())}" /></div>
           <div><label>Total Kitni Saree Wapas Aayi (Pcs) *</label><input type="number" id="jwRetQty" min="1" value="${isEdit && orig ? orig.qty : (pendQty > 0 ? pendQty : '')}" placeholder="e.g. 93" /></div>
           <div style="grid-column: 1 / -1;"><label>Note (Optional)</label><input id="jwRetNote" value="${esc(orig ? (orig.note || '') : '')}" placeholder="e.g. Ok checked" data-custom-enter="1" onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveJWReturnInward(); }" /></div>
         </div>
-        <button class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveJWReturnInward()">${isEdit ? '✅ Update Wapsi & Sync Stock (Ctrl+S)' : '✅ Wapsi Save Karein (Pending - / Stock +)'}</button>
+        <button class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%; height:44px;" onclick="saveJWReturnInward()">${isEdit ? '✅ Update Wapsi & Sync Stock (Ctrl+S)' : '✅ Wapsi Save Karein (Pending - / Stock +)'}</button>
       </div>`;
     setTimeout(() => { const el = document.getElementById('jwRetQty'); if (el) { el.focus(); el.select(); } }, 50);
   }
@@ -655,20 +711,20 @@ async function saveDirectInward() {
     const bunkarName = document.getElementById('dirBunkar').value.trim().toUpperCase();
     const qty = parseInt(document.getElementById('dirQty').value, 10);
     const note = document.getElementById('dirNote').value.trim();
-    if (!bunkarName) return alert('Bunkar ka naam daalein!');
-    if (!qty || qty <= 0) return alert('Sahi Pcs daalein!');
+    if (!bunkarName) return jwNotify('Bunkar ka naam daalein!', 'warn');
+    if (!qty || qty <= 0) return jwNotify('Sahi Pcs daalein!', 'warn');
     const record = { direction: 'IN', jobWorkType: 'DIRECT_BAITHAK', workerName: 'DIRECT BAITHAK', bunkarName, qty, date, note, createdAt: inState.editOrig ? inState.editOrig.createdAt : Date.now() };
     if (inState.editId) record.id = inState.editId;
     await dbPut('jobWorkLedger', record);
     if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
     if (inState.editId) {
-      alert(`✅ ${bunkarName} (${qty} Pcs) Update ho gayi!`);
+      jwNotify(`✅ ${bunkarName} (${qty} Pcs) Update ho gayi!`, 'success');
       inState.editId = null; inState.editOrig = null; inState.step = 'HISTORY'; renderStockInward(); return;
     }
-    alert(`✅ ${bunkarName} ki ${qty} saree Dukan Stock me jud gayi!`);
+    jwNotify(`✅ ${bunkarName} ki ${qty} saree Dukan Stock me jud gayi!`, 'success');
     document.getElementById('dirBunkar').value = ''; document.getElementById('dirQty').value = ''; document.getElementById('dirNote').value = ''; document.getElementById('dirBunkar').focus();
-  } catch (err) { alert('Save Error: ' + err.message); }
+  } catch (err) { jwNotify('Save Error: ' + err.message, 'error'); }
 }
 
 async function saveJWReturnInward() {
@@ -677,7 +733,7 @@ async function saveJWReturnInward() {
     const qty = parseInt(document.getElementById('jwRetQty').value, 10);
     const note = document.getElementById('jwRetNote').value.trim();
     const jwUpper = inState.jwType.toUpperCase(), workerName = inState.worker.name.toUpperCase();
-    if (!qty || qty <= 0) return alert('Sahi Quantity daalein!');
+    if (!qty || qty <= 0) return jwNotify('Sahi Quantity daalein!', 'warn');
     const pend = await dbGet('jobWorkPending', `${workerName}__${jwUpper}`);
     const isEdit = !!inState.editId;
     const pendQty = (pend ? pend.qty : 0) + (isEdit && inState.editOrig ? (Number(inState.editOrig.qty) || 0) : 0);
@@ -687,13 +743,13 @@ async function saveJWReturnInward() {
     await dbPut('jobWorkLedger', record);
     if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
-    alert(`✅ ${workerName} se ${qty} Pcs wapsi ${isEdit ? 'Update' : 'Save'} ho gayi! (Baki Pending: ${Math.max(0, pendQty - qty)} Pcs)`);
+    jwNotify(`✅ ${workerName} se ${qty} Pcs wapsi ${isEdit ? 'Update' : 'Save'}! (Baki: ${Math.max(0, pendQty - qty)} Pcs)`, 'success');
     const retTarget = inState.returnTo;
     inState.editId = null; inState.editOrig = null; inState.returnTo = '';
     if (retTarget === 'PASSBOOK') { switchTabSectionOnly('tab-jobwork'); renderJWOutward(); }
     else if (isEdit) { inState.step = 'HISTORY'; renderStockInward(); }
     else { inState = { step: 'MENU', jwType: '', worker: null, editId: null, editOrig: null, returnTo: '' }; renderStockInward(); }
-  } catch (err) { alert('Save Error: ' + err.message); }
+  } catch (err) { jwNotify('Save Error: ' + err.message, 'error'); }
 }
 
 async function reverseLedgerEntry(id, returnTo) {
@@ -704,6 +760,7 @@ async function reverseLedgerEntry(id, returnTo) {
     await dbDelete('jobWorkLedger', id);
     if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
+    jwNotify('Entry delete ho gayi & stock sync hua', 'info');
     returnTo === 'PASSBOOK' ? renderJWOutward() : renderStockInward();
-  } catch (err) { alert('Reverse Error: ' + err.message); }
+  } catch (err) { jwNotify('Reverse Error: ' + err.message, 'error'); }
 }
