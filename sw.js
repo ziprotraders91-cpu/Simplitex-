@@ -1,4 +1,4 @@
-const CACHE_NAME = 'simplitex-live-v2';
+const CACHE_NAME = 'simplitex-live-v3';
 const CORE_FILES = [
   './',
   './index.html',
