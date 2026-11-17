@@ -1,11 +1,7 @@
-// === SimpliTex Core App v5 (Tally Loader + 4-Stage Stock Drilldown + Auto Stock Audit + Year Closing) ===
+// === SimpliTex Core App v6 (Tally Loader + 4-Stage Stock Drilldown + Auto Stock Audit + Year Closing + LAN Live Sync) ===
 const MASTER_SECRET = 'SIMPLITEX_MAU_2026_SECRET';
 const JW_POOL_KEY = '__JW_POOL__';
 let stockTabMode = 'BUNKAR'; // 'BUNKAR' | 'CONVERTED' | 'JW_WAPSI' | 'BARCODE'
-
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
-}
 
 // 0. TALLY-STYLE COMPANY LOADING SCREEN
 function ensureTallyLoader() {
@@ -279,6 +275,7 @@ function openTab(tabId, btn) {
   document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
 
+  hideLanSyncToast();
   if (tabId === 'tab-dash') refreshDashboard();
   if (tabId === 'tab-settings') renderSettingsBackupExtras();
   if (typeof window.onTabChanged === 'function') window.onTabChanged(tabId);
@@ -654,7 +651,24 @@ function renderSettingsBackupExtras() {
       : `<span style="color:#15803d; font-weight:700;">✅ Last Backup: ${dStr} (${daysAgo === 0 ? 'Aaj' : daysAgo + ' din pehle'})</span>`;
   }
 
+  let lanBoxHtml = '';
+  if (typeof window.stxIsLanMode === 'function' && window.stxIsLanMode()) {
+    const info = window.STX_LAN_INFO || {};
+    const ips = Array.isArray(info.hostIps) && info.hostIps.length ? info.hostIps : [];
+    const port = info.port || 3000;
+    const linksText = ips.length
+      ? ips.map((ip) => `<b>http://${ip}:${port}</b>`).join(' ya ')
+      : `<b>${window.location.origin}</b>`;
+    lanBoxHtml = `
+      <div style="background:#eff6ff; border:1px solid #93c5fd; padding:10px 12px; border-radius:8px; margin-bottom:10px; font-size:12.5px; color:#1e3a8a;">
+        <b>🖥️ Multi-PC LAN Sharing ON hai!</b><br/>
+        Dukan ke baaki computers par Chrome kholkar ye link daalein: ${linksText}
+      </div>
+    `;
+  }
+
   host.innerHTML = `
+    ${lanBoxHtml}
     <div style="font-size:12.5px; margin-bottom:10px;">${statusHtml}</div>
     <div style="border-top:1px dashed #d1d5db; padding-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
       <button type="button" class="btn btn-dark btn-sm" onclick="runManualStockSync()">
@@ -723,21 +737,112 @@ async function refreshDashboard() {
 }
 
 function updateNetBadge() {
-  document.getElementById('netStatus').textContent = navigator.onLine ? 'Online + Offline' : 'Offline Mode';
+  const el = document.getElementById('netStatus');
+  if (!el) return;
+  if (typeof window.stxIsLanMode === 'function' && window.stxIsLanMode()) {
+    el.textContent = '🟢 LAN Live (Multi-PC)';
+    el.style.background = '#dcfce7';
+    el.style.color = '#166534';
+  } else {
+    el.textContent = navigator.onLine ? 'Online + Offline' : 'Offline Mode';
+    el.style.background = '';
+    el.style.color = '';
+  }
 }
 window.addEventListener('online', updateNetBadge);
 window.addEventListener('offline', updateNetBadge);
 
+// 8. LIVE MULTI-PC SYNC LISTENER (SSE Updates from Other PCs)
+function showLanSyncToast() {
+  let toast = document.getElementById('stxLanSyncToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'stxLanSyncToast';
+    toast.style.cssText = [
+      'position:fixed', 'right:16px', 'bottom:16px', 'z-index:9990',
+      'background:#0b0d12', 'color:#fff', 'border:1px solid #374151',
+      'padding:10px 14px', 'border-radius:10px', 'box-shadow:0 10px 25px rgba(0,0,0,0.3)',
+      'display:flex', 'align-items:center', 'gap:10px', 'font-size:12.5px', 'font-weight:600'
+    ].join(';');
+    toast.innerHTML = `
+      <span>🔄 Dusre PC par naya data save hua hai</span>
+      <button type="button" class="btn btn-success btn-sm" onclick="refreshActiveTabAfterLanSync()">Refresh Tab</button>
+      <button type="button" class="btn btn-light btn-sm" onclick="hideLanSyncToast()">✕</button>
+    `;
+    document.body.appendChild(toast);
+  }
+  toast.style.display = 'flex';
+}
+
+function hideLanSyncToast() {
+  const toast = document.getElementById('stxLanSyncToast');
+  if (toast) toast.style.display = 'none';
+}
+
+function refreshActiveTabAfterLanSync() {
+  hideLanSyncToast();
+  const sec = getActiveSection();
+  if (!sec) return;
+  if (sec.id === 'tab-dash') refreshDashboard();
+  else if (sec.id === 'tab-stock-detail') openStockDrilldown();
+  else if (sec.id === 'tab-settings') { loadFirms(); renderSettingsBackupExtras(); }
+  else if (typeof window.onTabChanged === 'function') window.onTabChanged(sec.id);
+}
+
+window.addEventListener('stx-lan-sync', async (ev) => {
+  try {
+    const stores = (ev && ev.detail && Array.isArray(ev.detail.stores)) ? ev.detail.stores : [];
+    if (stores.includes('_meta')) {
+      const lockVisible = !document.getElementById('lockScreen').classList.contains('hidden');
+      if (lockVisible && checkLicense()) {
+        document.getElementById('lockScreen').classList.add('hidden');
+        initApp();
+        return;
+      }
+    }
+    if (stores.includes('firms')) await loadFirms();
+    await refreshDashboard();
+
+    const sec = getActiveSection();
+    if (!sec) return;
+    if (sec.id === 'tab-stock-detail') {
+      await openStockDrilldown();
+    } else if (sec.id === 'tab-daybook' && typeof window.onTabChanged === 'function') {
+      window.onTabChanged('tab-daybook');
+    } else if (sec.id === 'tab-settings') {
+      renderSettingsBackupExtras();
+    } else if (sec.id !== 'tab-dash') {
+      showLanSyncToast();
+    }
+  } catch (_) {}
+});
+
+async function manageServiceWorkerForMode() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    if (typeof window.stxIsLanMode === 'function' && window.stxIsLanMode()) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+    } else {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+  } catch (_) {}
+}
+
 async function initApp() {
   try {
-    showTallyLoader('SimpliTex ERP', 'Checking License...', 15);
+    showTallyLoader('SimpliTex ERP', 'Connecting Database...', 15);
+    if (window.stxLanReady) await window.stxLanReady;
+    await manageServiceWorkerForMode();
     updateNetBadge();
+
+    setTallyLoader('SimpliTex ERP', 'Checking License...', 25);
     if (!checkLicense()) {
       hideTallyLoader(true);
       return;
     }
 
-    setTallyLoader(null, 'Opening Company Database...', 40);
+    setTallyLoader(null, 'Opening Company Database...', 45);
     await openDB();
     await sleepMs(100);
 
