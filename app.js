@@ -31,7 +31,7 @@ function addDaysYMD(days) {
   return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
 }
 
-// 2. License & Anti-Date-Cheat
+// 2. License & Anti-Date-Cheat (Payment Lock)
 function getOrCreateLicense() {
   let lic = JSON.parse(localStorage.getItem('simplitex_license') || 'null');
   if (!lic) {
@@ -91,49 +91,7 @@ function applyUnlockCode() {
   initApp();
 }
 
-// 3. LocalStorage PIN Auth
-function checkPinAuth() {
-  const auth = JSON.parse(localStorage.getItem('simplitex_auth') || 'null');
-  if (sessionStorage.getItem('simplitex_logged') === '1') return true;
-  const pinScreen = document.getElementById('pinScreen');
-  const hint = document.getElementById('pinHint');
-  if (!auth) {
-    hint.textContent = 'Naya Account banayein (Device par save hoga)';
-  } else {
-    document.getElementById('loginUser').value = auth.username;
-    hint.textContent = '4-Digit PIN daal kar Enter dabaye';
-  }
-  pinScreen.classList.remove('hidden');
-  setTimeout(() => {
-    const target = auth ? document.getElementById('loginPin') : document.getElementById('loginUser');
-    if (target) target.focus();
-  }, 100);
-  return false;
-}
-
-function handlePinLogin() {
-  const user = document.getElementById('loginUser').value.trim();
-  const pin = document.getElementById('loginPin').value.trim();
-  if (!user || pin.length < 4) return alert('Username aur 4-digit PIN daalein!');
-  const pinHash = makeSignature(user + ':' + pin);
-  const saved = JSON.parse(localStorage.getItem('simplitex_auth') || 'null');
-
-  if (!saved) {
-    localStorage.setItem('simplitex_auth', JSON.stringify({ username: user, pinHash }));
-  } else if (saved.username !== user || saved.pinHash !== pinHash) {
-    return alert('Username ya PIN galat hai!');
-  }
-  sessionStorage.setItem('simplitex_logged', '1');
-  document.getElementById('pinScreen').classList.add('hidden');
-  initApp();
-}
-
-function logoutPin() {
-  sessionStorage.removeItem('simplitex_logged');
-  location.reload();
-}
-
-// 4. UNIVERSAL SEARCH & 15-ROW PAGINATION ENGINE
+// 3. UNIVERSAL SEARCH & 15-ROW PAGINATION ENGINE
 window._stxPagerState = window._stxPagerState || {};
 window._stxPagerConfigs = window._stxPagerConfigs || {};
 
@@ -227,7 +185,7 @@ function drawPagedBody(id) {
   `;
 }
 
-// 5. Navigation & Stock Drilldown (3 Clean Top Buttons: Bunkar | Job Work se Wapsi | Barcode Stock)
+// 4. Navigation & Stock Drilldown (3 Clean Top Buttons: Bunkar | Job Work se Wapsi | Barcode Stock)
 function getActiveSection() {
   return document.querySelector('.tab-sec:not(.hidden)');
 }
@@ -364,7 +322,7 @@ async function openStockDrilldown(mode) {
   }
 }
 
-// 6. TALLY KEYBOARD ENGINE (Enter = Next, Backspace / Shift+Enter = Step Back, Esc = Back Screen)
+// 5. TALLY KEYBOARD ENGINE (Enter = Next, Backspace / Shift+Enter = Step Back, Esc = Back Screen)
 function moveListSelection(listEl, dir) {
   const rows = Array.from(listEl.querySelectorAll('.list-row'));
   if (!rows.length) return;
@@ -407,7 +365,6 @@ function focusPrevField(currentEl) {
 
 document.addEventListener('keydown', (e) => {
   if (!document.getElementById('lockScreen').classList.contains('hidden')) return;
-  if (!document.getElementById('pinScreen').classList.contains('hidden')) return;
 
   if (e.altKey) {
     const map = { '0':'tab-dash', '1':'tab-jobwork', '2':'tab-inward', '3':'tab-order', '4':'tab-barcode', '5':'tab-challan', '7':'tab-settings' };
@@ -483,7 +440,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// 7. Multi-Firm Settings
+// 6. Multi-Firm Settings
 async function saveFirm() {
   try {
     const name = document.getElementById('firmName').value.trim();
@@ -520,7 +477,7 @@ async function loadFirms() {
     firms.length ? firms.map((f) => f.shortCode).join(' / ') + ' — Saree ERP' : 'Settings me Firm add karein';
 }
 
-// 8. Backup & Dashboard
+// 7. Backup & Dashboard
 async function downloadBackup() {
   const json = await exportFullBackup();
   const blob = new Blob([json], { type: 'application/json' });
@@ -565,7 +522,6 @@ window.addEventListener('offline', updateNetBadge);
 async function initApp() {
   updateNetBadge();
   if (!checkLicense()) return;
-  if (!checkPinAuth()) return;
   await openDB();
   await loadFirms();
   await refreshDashboard();
