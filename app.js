@@ -1,4 +1,4 @@
-// === SimpliTex Core App v7 (Pro Dashboard + Auto Error Recovery + Toast/Modal Kit + Pending Reports + Party Master + LAN Sync) ===
+// === SimpliTex Core App v8 (Pro Dashboard + Accidental Delete Guard + 6-Field Party Master + Karigar Wapsi Breakdown) ===
 const MASTER_SECRET = 'SIMPLITEX_MAU_2026_SECRET';
 const JW_POOL_KEY = '__JW_POOL__';
 let stockTabMode = 'BUNKAR'; // 'BUNKAR' | 'CONVERTED' | 'JW_WAPSI' | 'BARCODE'
@@ -25,7 +25,6 @@ function stxRecordError(errMsg, source) {
   if (window._stxErrorLog.length > 25) window._stxErrorLog.pop();
   console.error(`[SimpliTex AutoGuard:${source}]`, msg);
 
-  // Agar Tally loader atka ho toh turant hata dein taaki screen lock na ho
   const loader = document.getElementById('stxTallyLoader');
   if (loader && !loader.classList.contains('hidden')) {
     hideTallyLoader(true);
@@ -42,7 +41,7 @@ window.addEventListener('unhandledrejection', (ev) => {
   stxRecordError(reason, 'async');
 });
 
-// === IN-APP TOAST & MODAL UI KIT ===
+// === IN-APP TOAST, MODAL & ACCIDENTAL DELETE GUARD ===
 function stxToast(msg, type = 'info', durationMs = 2800) {
   if (!document.body) return;
   let wrap = document.getElementById('stxToastWrap');
@@ -112,6 +111,31 @@ function stxOpenModal({ title = 'Info', bodyHtml = '', buttons = [] }) {
 }
 window.stxOpenModal = stxOpenModal;
 
+// Accidental Delete Guard: Cancel button hamesha default focused rehta hai
+function stxConfirmDelete({ title = '⚠️ Delete Confirm Karein?', detailsHtml = '', confirmLabel = '🗑️ Haan, Delete Karein', onConfirm }) {
+  stxOpenModal({
+    title,
+    bodyHtml: `
+      <p style="margin-bottom:8px; color:#475569; font-weight:600;">
+        Kya aap sach mein ye record delete karna chahte hain? Galti se delete na ho isliye neeche details check karein:
+      </p>
+      <div class="stx-del-box">${detailsHtml || 'Selected record permanently hat jayega.'}</div>
+    `,
+    buttons: [
+      { label: 'Cancel (Safe)', className: 'btn btn-light', onClick: () => stxCloseModal() },
+      {
+        label: confirmLabel,
+        className: 'btn btn-danger',
+        onClick: async () => {
+          stxCloseModal();
+          if (typeof onConfirm === 'function') await onConfirm();
+        }
+      }
+    ]
+  });
+}
+window.stxConfirmDelete = stxConfirmDelete;
+
 // === 0. TALLY-STYLE COMPANY LOADING SCREEN ===
 function ensureTallyLoader() {
   let el = document.getElementById('stxTallyLoader');
@@ -121,7 +145,7 @@ function ensureTallyLoader() {
   el.id = 'stxTallyLoader';
   el.style.cssText = [
     'position:fixed', 'inset:0', 'z-index:99999',
-    'background:#0f172a', 'color:#f8fafc',
+    'background:#0b1120', 'color:#f8fafc',
     'display:flex', 'align-items:center', 'justify-content:center',
     'padding:20px', 'font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif',
     'transition:opacity 0.25s ease'
@@ -241,7 +265,6 @@ function checkLicense() {
     return false;
   }
 
-  // LAN mode me client PC ki galat clock ko shared license me na likhein
   if (!isLan || srvTime) {
     lic.lastSeenMs = now;
     localStorage.setItem('simplitex_license', JSON.stringify(lic));
@@ -425,6 +448,14 @@ async function openStockDrilldown(mode) {
   const ready = (await dbGetAll('readyStock')).filter((r) => r.qty > 0);
   const readyTotal = ready.reduce((s, x) => s + (x.qty || 0), 0);
 
+  const rawIn = (typeof dbGetByIndex === 'function')
+    ? await dbGetByIndex('jobWorkLedger', 'direction', 'IN')
+    : (await dbGetAll('jobWorkLedger')).filter((l) => l.direction === 'IN');
+  const jwReturns = rawIn
+    .filter((l) => l.jobWorkType !== 'DIRECT_BAITHAK')
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
+  const totalJWWapsiEver = jwReturns.reduce((s, l) => s + (Number(l.qty) || 0), 0);
+
   const btnStyle = (m) => stockTabMode === m
     ? 'background:#0f172a; color:#fff; border:1px solid #0f172a;'
     : 'background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1;';
@@ -439,13 +470,13 @@ async function openStockDrilldown(mode) {
 
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
         <button type="button" class="btn btn-sm" style="${btnStyle('BUNKAR')}" onclick="openStockDrilldown('BUNKAR')">
-          🧵 Bunkar Stock (${bunkarTotal} Pcs)
+          🧵 Karigar / Bunkar Stock (${bunkarTotal} Pcs)
         </button>
         <button type="button" class="btn btn-sm" style="${btnStyle('CONVERTED')}" onclick="openStockDrilldown('CONVERTED')">
           🔄 Converted Stock (${convertedTotal} Pcs)
         </button>
         <button type="button" class="btn btn-sm" style="${btnStyle('JW_WAPSI')}" onclick="openStockDrilldown('JW_WAPSI')">
-          ↩️ Job Work se Wapsi (${jwPoolQty} Pcs)
+          ↩️ Job Work se Wapsi (${jwReturns.length} | ${totalJWWapsiEver} Pcs)
         </button>
         <button type="button" class="btn btn-sm" style="${btnStyle('BARCODE')}" onclick="openStockDrilldown('BARCODE')">
           🏷️ Ready Barcode (${readyTotal} Pcs)
@@ -464,16 +495,16 @@ async function openStockDrilldown(mode) {
       id: 'stockBunkarPager',
       items: bunkarOnly,
       perPage: 15,
-      placeholder: '🔍 Bunkar search karein...',
-      headHtml: '<tr><th>Bunkar / Saree Naam (Click for Passbook)</th><th>Available Pcs</th></tr>',
+      placeholder: '🔍 Karigar / Bunkar search karein...',
+      headHtml: '<tr><th>Karigar / Bunkar Naam (Click for Passbook)</th><th>Available Pcs</th></tr>',
       getSearchText: (b) => b.bunkarName,
       renderRow: (b) => `
-        <tr style="cursor:pointer;" onclick="if(typeof openBunkarPassbook==='function') openBunkarPassbook('${stxEsc(b.bunkarName)}')">
+        <tr class="stx-row-click" onclick="if(typeof openBunkarPassbook==='function') openBunkarPassbook('${stxEsc(b.bunkarName)}')">
           <td><b style="color:#1d4ed8; text-decoration:underline;">${stxEsc(b.bunkarName)}</b> <small>(Passbook)</small></td>
           <td><b>${b.qty} Pcs</b></td>
         </tr>
       `,
-      emptyHtml: '<tr><td colspan="2">Koi Bunkar stock nahi hai</td></tr>'
+      emptyHtml: '<tr><td colspan="2">Koi Karigar / Bunkar stock nahi hai</td></tr>'
     });
   } else if (stockTabMode === 'CONVERTED') {
     content.innerHTML = `
@@ -499,17 +530,15 @@ async function openStockDrilldown(mode) {
       emptyHtml: '<tr><td colspan="3">Abhi koi Converted Design stock nahi hai</td></tr>'
     });
   } else if (stockTabMode === 'JW_WAPSI') {
-    const rawIn = (typeof dbGetByIndex === 'function')
-      ? await dbGetByIndex('jobWorkLedger', 'direction', 'IN')
-      : (await dbGetAll('jobWorkLedger')).filter((l) => l.direction === 'IN');
-
-    const jwReturns = rawIn
-      .filter((l) => l.jobWorkType !== 'DIRECT_BAITHAK')
-      .sort((a, b) => b.createdAt - a.createdAt);
+    const analytics = (typeof window.stxGetJWAnalytics === 'function')
+      ? await window.stxGetJWAnalytics()
+      : { inAllocMap: {} };
+    const inAllocMap = analytics.inAllocMap || {};
 
     content.innerHTML = `
-      <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px 14px; border-radius:8px; font-weight:700; color:#1e3a8a; margin-bottom:12px;">
-        Available Job Work se Wapas Pool: <span style="font-size:18px;">${jwPoolQty} Pcs</span>
+      <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px 14px; border-radius:10px; font-weight:700; color:#1e3a8a; margin-bottom:12px; font-size:12.5px;">
+        ✅ Job Work se wapas aayi sarees ab <b>Karigar ke naam</b> par hi save hoti hain (jaise KARAN - 10 pcs, ROHAN - 10 pcs).
+        ${jwPoolQty > 0 ? `<span style="margin-left:8px; color:#b45309;">| Legacy Pool: ${jwPoolQty} Pcs</span>` : ''}
       </div>
       <div id="stockJWWapsiPager"></div>
     `;
@@ -517,18 +546,28 @@ async function openStockDrilldown(mode) {
       id: 'stockJWWapsiPager',
       items: jwReturns,
       perPage: 15,
-      placeholder: '🔍 Date, Job Work ya Worker search karein...',
-      headHtml: '<tr><th>Date</th><th>Job Work</th><th>Worker Name</th><th>Wapas Pcs</th><th>Note</th></tr>',
-      getSearchText: (l) => `${l.date} ${l.jobWorkType} ${l.workerName} ${l.note || ''}`,
-      renderRow: (l) => `
-        <tr>
-          <td style="white-space:nowrap;">${stxEsc(l.date)}</td>
-          <td><b>${stxEsc(l.jobWorkType)}</b></td>
-          <td><b>${stxEsc(l.workerName)}</b></td>
-          <td><b style="color:#15803d;">+${l.qty} Pcs</b></td>
-          <td><small>${stxEsc(l.note || '-')}</small></td>
-        </tr>
-      `,
+      placeholder: '🔍 Date, Job Work, Worker ya Karigar search karein...',
+      headHtml: '<tr><th>Date</th><th>Job Work & Worker</th><th>Karigar Breakdown</th><th>Wapas OK / Dmg</th><th>Note</th></tr>',
+      getSearchText: (l) => {
+        const allocs = (inAllocMap[l.id] || []).map((a) => `${a.bunkarName} ${a.qty}`).join(' ');
+        return `${l.date} ${l.jobWorkType} ${l.workerName} ${allocs} ${l.note || ''}`;
+      },
+      renderRow: (l) => {
+        const allocs = inAllocMap[l.id] || [];
+        const allocTxt = allocs.length
+          ? allocs.map((a) => `<b>${stxEsc(a.bunkarName === JW_POOL_KEY ? 'POOL' : a.bunkarName)}</b> - ${a.qty} pcs`).join(', ')
+          : '-';
+        const dmg = Number(l.damageQty) || 0;
+        return `
+          <tr>
+            <td style="white-space:nowrap;">${stxEsc(l.date)}</td>
+            <td><b>${stxEsc(l.jobWorkType)}</b><br/><small style="color:#64748b;">${stxEsc(l.workerName)}</small></td>
+            <td><small>${allocTxt}</small></td>
+            <td><b style="color:#15803d;">+${l.qty} Pcs</b>${dmg > 0 ? `<br/><small style="color:#dc2626; font-weight:700;">Dmg: ${dmg}</small>` : ''}</td>
+            <td><small>${stxEsc(l.note || '-')}</small></td>
+          </tr>
+        `;
+      },
       emptyHtml: '<tr><td colspan="5">Abhi Job Work se koi wapsi entry nahi hui</td></tr>'
     });
   } else if (stockTabMode === 'BARCODE') {
@@ -552,7 +591,7 @@ async function openStockDrilldown(mode) {
   }
 }
 
-// === 4B. PENDING REPORTS (ORDERS + KARIGAR) & PARTY MASTER ===
+// === 4B. PENDING REPORTS (ORDERS + KARIGAR) & 6-FIELD PARTY MASTER ===
 function computeOrderStatusFallback(order, allChallans) {
   if (typeof window.stxComputeOrderStatus === 'function') {
     return window.stxComputeOrderStatus(order, allChallans);
@@ -578,7 +617,8 @@ function computeOrderStatusFallback(order, allChallans) {
     totalPending += pq;
     return { name: it.name, orderedQty: oq, sentQty: used, pendingQty: pq };
   });
-  return { totalOrdered, totalSent: totalOrdered - totalPending, totalPending, isComplete: (order.items || []).length > 0 && totalPending === 0, items };
+  const isComplete = !!order.forceClosed || ((order.items || []).length > 0 && totalPending === 0);
+  return { totalOrdered, totalSent: totalOrdered - totalPending, totalPending, isComplete, items };
 }
 
 function ensureDynamicSection(id) {
@@ -700,6 +740,7 @@ async function openPendingReports(mode) {
   }
 }
 
+// === PARTY MASTER (Exact 6 Fields: Name, Mob, GSTIN, Address, City, Agent) ===
 async function openPartyMaster() {
   const sec = ensureDynamicSection('tab-parties');
   if (!sec) return;
@@ -724,18 +765,18 @@ async function openPartyMaster() {
     id: 'partyMasterPager',
     items: parties,
     perPage: 15,
-    placeholder: '🔍 Party naam, City, Agent, Marka ya Transport search karein...',
-    headHtml: '<tr><th>Party Name</th><th>City / Address</th><th>Agent</th><th>Marka / Transport</th><th>Action</th></tr>',
-    getSearchText: (p) => `${p.name} ${p.city || ''} ${p.address || ''} ${p.agent || ''} ${p.marka || ''} ${p.transport || ''} ${p.phone || ''}`,
+    placeholder: '🔍 Party naam, Mob, GSTIN, Address, City ya Agent search karein...',
+    headHtml: '<tr><th>Name & Mob</th><th>GSTIN</th><th>Address & City</th><th>Agent</th><th>Action</th></tr>',
+    getSearchText: (p) => `${p.name} ${p.phone || ''} ${p.gstin || ''} ${p.address || ''} ${p.city || ''} ${p.agent || ''}`,
     renderRow: (p) => `
-      <tr>
+      <tr class="stx-row-click" onclick="openPartyModal(${p.id})">
         <td><b>${stxEsc(p.name)}</b>${p.phone ? `<br/><small>📞 ${stxEsc(p.phone)}</small>` : ''}</td>
-        <td><small>${stxEsc(p.city || '-')}${p.address && p.address !== p.city ? '<br/>' + stxEsc(p.address) : ''}</small></td>
+        <td><small>${stxEsc(p.gstin || '-')}</small></td>
+        <td><small>${stxEsc(p.address || '-')}${p.city ? `<br/><b>${stxEsc(p.city)}</b>` : ''}</small></td>
         <td><small><b>${stxEsc(p.agent || '-')}</b></small></td>
-        <td><small>${stxEsc(p.marka || '-')} | ${stxEsc(p.transport || '-')}</small></td>
-        <td style="white-space:nowrap;">
+        <td style="white-space:nowrap;" onclick="event.stopPropagation()">
           <button class="btn btn-light btn-sm" onclick="openPartyModal(${p.id})">✏️ Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="deletePartyById(${p.id})">X</button>
+          <button class="btn btn-danger btn-sm" onclick="deletePartyById(${p.id})">🗑️</button>
         </td>
       </tr>
     `,
@@ -749,13 +790,12 @@ async function openPartyModal(id) {
     title: p ? '✏️ Party Edit Karein' : '+ Nayi Party Add Karein',
     bodyHtml: `
       <div class="grid-2" style="align-items:start;">
-        <div><label>Party Name *</label><input id="pmName" value="${stxEsc(p?.name || '')}" placeholder="e.g. SHREE SHARDA SAREE" /></div>
-        <div><label>City *</label><input id="pmCity" value="${stxEsc(p?.city || '')}" placeholder="e.g. CHIPLOON" /></div>
-        <div><label>Mobile No.</label><input id="pmPhone" value="${stxEsc(p?.phone || '')}" placeholder="98xxxxxxxx" /></div>
-        <div><label>Agent</label><input id="pmAgent" value="${stxEsc(p?.agent || '')}" placeholder="e.g. RAJESH JI" /></div>
-        <div><label>Marka</label><input id="pmMarka" value="${stxEsc(p?.marka || '')}" placeholder="e.g. SSS" /></div>
-        <div><label>Transport</label><input id="pmTrans" value="${stxEsc(p?.transport || '')}" placeholder="e.g. VRL" /></div>
-        <div style="grid-column:1 / -1;"><label>Full Address</label><input id="pmAddr" value="${stxEsc(p?.address || '')}" placeholder="Shop address..." /></div>
+        <div><label>1. Name *</label><input id="pmName" value="${stxEsc(p?.name || '')}" placeholder="e.g. SHREE SHARDA SAREE" /></div>
+        <div><label>2. Mob. No.</label><input id="pmPhone" type="tel" value="${stxEsc(p?.phone || '')}" placeholder="98xxxxxxxx" /></div>
+        <div><label>3. GSTIN</label><input id="pmGstin" value="${stxEsc(p?.gstin || '')}" placeholder="e.g. 27AA..." /></div>
+        <div><label>4. Address</label><input id="pmAddr" value="${stxEsc(p?.address || '')}" placeholder="Shop / Market address..." /></div>
+        <div><label>5. City *</label><input id="pmCity" value="${stxEsc(p?.city || '')}" placeholder="e.g. CHIPLOON" /></div>
+        <div><label>6. Agent</label><input id="pmAgent" value="${stxEsc(p?.agent || '')}" placeholder="e.g. RAJESH JI" /></div>
       </div>
     `,
     buttons: [
@@ -765,16 +805,22 @@ async function openPartyModal(id) {
         className: 'btn btn-success',
         onClick: async () => {
           const name = document.getElementById('pmName').value.trim().toUpperCase();
+          const phone = document.getElementById('pmPhone').value.trim();
+          const gstin = document.getElementById('pmGstin').value.trim().toUpperCase();
+          const address = document.getElementById('pmAddr').value.trim().toUpperCase();
           const city = document.getElementById('pmCity').value.trim().toUpperCase();
+          const agent = document.getElementById('pmAgent').value.trim().toUpperCase();
+
           if (!name) return stxToast('Party Name zaroori hai!', 'warn');
           const payload = {
             name,
+            phone,
+            gstin,
+            address: address || city,
             city,
-            address: document.getElementById('pmAddr').value.trim().toUpperCase() || city,
-            agent: document.getElementById('pmAgent').value.trim().toUpperCase(),
-            phone: document.getElementById('pmPhone').value.trim(),
-            marka: document.getElementById('pmMarka').value.trim().toUpperCase(),
-            transport: document.getElementById('pmTrans').value.trim().toUpperCase()
+            agent,
+            marka: p?.marka || '',
+            transport: p?.transport || ''
           };
           if (p && p.id) payload.id = p.id;
           await dbPut('parties', payload);
@@ -788,10 +834,17 @@ async function openPartyModal(id) {
 }
 
 async function deletePartyById(id) {
-  if (!confirm('Kya is Party ko Master list se hatana hai?')) return;
-  await dbDelete('parties', id);
-  stxToast('Party delete ho gayi', 'info');
-  openPartyMaster();
+  const p = await dbGet('parties', id);
+  if (!p) return;
+  stxConfirmDelete({
+    title: '⚠️ Party Delete Karein?',
+    detailsHtml: `<b>Party:</b> ${stxEsc(p.name)}<br/><b>City:</b> ${stxEsc(p.city || '-')} &nbsp;|&nbsp; <b>Mob:</b> ${stxEsc(p.phone || '-')}`,
+    onConfirm: async () => {
+      await dbDelete('parties', id);
+      stxToast('Party delete ho gayi', 'info');
+      openPartyMaster();
+    }
+  });
 }
 
 // === 5. TALLY KEYBOARD ENGINE ===
@@ -938,10 +991,17 @@ async function saveFirm() {
 }
 
 async function deleteFirm(id) {
-  if (!confirm('Is Firm ko hatana hai?')) return;
-  await dbDelete('firms', id);
-  await loadFirms();
-  stxToast('Firm delete ho gayi', 'info');
+  const f = await dbGet('firms', id);
+  if (!f) return;
+  stxConfirmDelete({
+    title: '⚠️ Firm Delete Karein?',
+    detailsHtml: `<b>Firm:</b> ${stxEsc(f.name)} (${stxEsc(f.shortCode)})`,
+    onConfirm: async () => {
+      await dbDelete('firms', id);
+      await loadFirms();
+      stxToast('Firm delete ho gayi', 'info');
+    }
+  });
 }
 
 async function loadFirms() {
@@ -953,7 +1013,7 @@ async function loadFirms() {
         <td><b>${stxEsc(f.name)}</b><br/><small>${stxEsc(f.address || '')}</small></td>
         <td><b>${stxEsc(f.shortCode)}</b></td>
         <td>${stxEsc(f.phone || '-')}</td>
-        <td><button class="btn btn-danger btn-sm" onclick="deleteFirm(${f.id})">Delete</button></td>
+        <td><button class="btn btn-danger btn-sm" onclick="deleteFirm(${f.id})">🗑️ Delete</button></td>
       </tr>
     `).join('') || '<tr><td colspan="4">Abhi koi firm add nahi hai</td></tr>';
   }
@@ -1094,7 +1154,7 @@ function ensureDashboardProWidgets() {
       <div class="stx-kpi-card" onclick="openStockDrilldown('BUNKAR')">
         <div class="stx-kpi-label">📦 Total Stock</div>
         <div class="stx-kpi-val" id="kpiStockTotal">0 Pcs</div>
-        <div class="stx-kpi-sub" id="kpiStockSub">Bunkar: 0 | Conv: 0 | Ready: 0</div>
+        <div class="stx-kpi-sub" id="kpiStockSub">Karigar: 0 | Conv: 0 | Ready: 0</div>
       </div>
       <div class="stx-kpi-card" onclick="openPendingReports('KARIGAR')">
         <div class="stx-kpi-label">🧵 Karigar Pending</div>
@@ -1162,7 +1222,6 @@ async function refreshDashboard() {
   document.getElementById('statReadyStock').textContent = readyTotal;
   document.getElementById('statChallans').textContent = challans.length;
 
-  // Compute Pending Orders
   const chByOrd = {};
   challans.forEach((c) => {
     if (!c.orderNo) return;
@@ -1180,7 +1239,6 @@ async function refreshDashboard() {
     }
   });
 
-  // Compute Today's Sale
   const today = stxTodayISO();
   const todayChallans = challans.filter((c) => c.date === today);
   const todayPcs = todayChallans.reduce((s, c) => s + (Number(c.totalPcs) || 0), 0);
@@ -1189,7 +1247,7 @@ async function refreshDashboard() {
   const elKpiStock = document.getElementById('kpiStockTotal');
   if (elKpiStock) {
     elKpiStock.textContent = `${grandTotal} Pcs`;
-    document.getElementById('kpiStockSub').textContent = `Bunkar: ${unbarcodedTotal} | Conv: ${convertedTotal} | Ready: ${readyTotal}`;
+    document.getElementById('kpiStockSub').textContent = `Karigar: ${unbarcodedTotal} | Conv: ${convertedTotal} | Ready: ${readyTotal}`;
     document.getElementById('kpiJWTotal').textContent = `${pendingJWTotal} Pcs`;
     document.getElementById('kpiJWSub').textContent = `${pending.length} Karigar par baki`;
     document.getElementById('kpiOrdPending').textContent = `${pendOrdCount} Orders`;
