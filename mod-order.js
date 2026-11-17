@@ -1,4 +1,4 @@
-// === SimpliTex Module 3: Order Form (Aligned Boxes + Universal Search + 15-Row Pager) ===
+// === SimpliTex Module 3: Order Form (Agent Box + Manual Fold + Universal Pager) ===
 
 let orderState = { view: 'FORM', items: [] };
 
@@ -79,12 +79,12 @@ async function renderOrderModule() {
       id: 'ordersListPager',
       items: orders,
       perPage: 15,
-      placeholder: '🔍 Order No., Party, City, Transport, Saree ya Folder search karein...',
-      headHtml: '<tr><th>Order #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Items</th><th>Pack / Fold</th><th>Action</th></tr>',
+      placeholder: '🔍 Order No., Party, Agent, City, Transport, Saree ya Fold search karein...',
+      headHtml: '<tr><th>Order #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Agent</th><th>Items</th><th>Pack / Fold</th><th>Action</th></tr>',
       getSearchText: (o) => {
         const f = firms.find((x) => x.id === Number(o.firmId));
         const itemNames = (o.items || []).map((it) => it.name).join(' ');
-        return `${o.orderNo} ${o.date} ${f ? f.shortCode : ''} ${o.partyName} ${o.partyCity || ''} ${o.transport || ''} ${o.folderName || ''} ${itemNames}`;
+        return `${o.orderNo} ${o.date} ${f ? f.shortCode : ''} ${o.partyName} ${o.partyCity || ''} ${o.agent || ''} ${o.transport || ''} ${o.folderName || ''} ${itemNames}`;
       },
       renderRow: (o) => {
         const f = firms.find((x) => x.id === Number(o.firmId));
@@ -94,6 +94,7 @@ async function renderOrderModule() {
             <td style="white-space:nowrap;">${esc(o.date)}</td>
             <td><b>${esc(f ? f.shortCode : '-')}</b></td>
             <td><b>${esc(o.partyName)}</b><br/><small>${esc(o.partyCity || '')}</small></td>
+            <td><small><b>${esc(o.agent || '-')}</b></small></td>
             <td>${(o.items || []).length} Designs</td>
             <td>${esc(o.packingType || '')} / <b>${esc(o.folderName || '')}</b></td>
             <td style="white-space:nowrap;">
@@ -103,18 +104,23 @@ async function renderOrderModule() {
           </tr>
         `;
       },
-      emptyHtml: '<tr><td colspan="7">Abhi koi Order save nahi hai</td></tr>'
+      emptyHtml: '<tr><td colspan="8">Abhi koi Order save nahi hai</td></tr>'
     });
     return;
   }
 
-  // === ORDER FORM VIEW (Aligned Boxes) ===
+  // === ORDER FORM VIEW ===
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
   const folders = await dbGetAll('folders');
   const designs = await dbGetAll('designs');
   const allOrders = await dbGetAll('orders');
   const nextOrderNo = allOrders.length ? Math.max(...allOrders.map((o) => Number(o.orderNo) || 0)) + 1 : 1;
+
+  // Unique Agents list for autocomplete
+  const agentSet = new Set();
+  parties.forEach((p) => { if (p.agent) agentSet.add(p.agent.toUpperCase()); });
+  allOrders.forEach((o) => { if (o.agent) agentSet.add(o.agent.toUpperCase()); });
 
   box.innerHTML = `
     <div class="card">
@@ -146,9 +152,16 @@ async function renderOrderModule() {
           </datalist>
         </div>
         <div><label>City / Address *</label><input id="ordPartyCity" placeholder="e.g. CHIPLOON" /></div>
+        <div>
+          <label>Agent Name (Broker / Dalal)</label>
+          <input id="ordAgent" list="ordAgentList" placeholder="e.g. RAJESH JI / SELF" />
+          <datalist id="ordAgentList">
+            ${Array.from(agentSet).map((a) => `<option value="${esc(a)}">`).join('')}
+          </datalist>
+        </div>
       </div>
 
-      <!-- Fast Keyboard Item Entry Box (Sabhi Boxes Ek Seedh Me) -->
+      <!-- Fast Keyboard Item Entry Box -->
       <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:8px; margin:14px 0;">
         <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:8px;">
           Saree Add Karein (Enter = Aage | Khali Box me Backspace = Piche):
@@ -189,7 +202,7 @@ async function renderOrderModule() {
         </table>
       </div>
 
-      <!-- Bottom Section (Aligned) -->
+      <!-- Bottom Section (Manual Fold + Aligned) -->
       <div style="background:#f9fafb; border:1px solid #d1d5db; padding:12px; border-radius:8px; margin-top:14px;">
         <div class="grid-2">
           <div><label>Marka / Through</label><input id="ordMarka" placeholder="e.g. SSS" /></div>
@@ -203,13 +216,11 @@ async function renderOrderModule() {
             </select>
           </div>
           <div>
-            <label>Folder / Fold * (e.g. Mishri)</label>
-            <div style="display:flex; gap:6px; align-items:stretch;">
-              <select id="ordFolder" style="flex:1;">
-                ${folders.map((f) => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('')}
-              </select>
-              <button type="button" class="btn btn-dark btn-sm" onclick="addNewFolderOption()">+ Add</button>
-            </div>
+            <label>Folder / Fold * (Manual Likhein)</label>
+            <input id="ordFolder" list="ordFolderList" placeholder="e.g. Mishri, Book Fold" />
+            <datalist id="ordFolderList">
+              ${folders.map((f) => `<option value="${esc(f.name)}">`).join('')}
+            </datalist>
           </div>
           <div style="grid-column: 1 / -1;">
             <label>Remarks</label>
@@ -236,22 +247,10 @@ async function autoFillPartyInOrder() {
   const p = parties.find((x) => x.name.toUpperCase() === name);
   if (p) {
     document.getElementById('ordPartyCity').value = p.city || '';
+    if (p.agent) document.getElementById('ordAgent').value = p.agent;
     if (p.marka) document.getElementById('ordMarka').value = p.marka;
     if (p.transport) document.getElementById('ordTransport').value = p.transport;
   }
-}
-
-async function addNewFolderOption() {
-  const name = prompt('Naye Folder / Fold ka naam likhein (e.g. Mishri, Book Fold):');
-  if (!name || !name.trim()) return;
-  const clean = name.trim();
-  await dbPut('folders', { name: clean });
-  const sel = document.getElementById('ordFolder');
-  const opt = document.createElement('option');
-  opt.value = clean;
-  opt.textContent = clean;
-  sel.appendChild(opt);
-  sel.value = clean;
 }
 
 function addOrderItem() {
@@ -307,25 +306,36 @@ async function saveOrderForm() {
     const date = document.getElementById('ordDate').value || todayISO();
     const partyName = document.getElementById('ordPartyName').value.trim().toUpperCase();
     const partyCity = document.getElementById('ordPartyCity').value.trim().toUpperCase();
+    const agent = document.getElementById('ordAgent').value.trim().toUpperCase();
     const marka = document.getElementById('ordMarka').value.trim().toUpperCase();
     const transport = document.getElementById('ordTransport').value.trim().toUpperCase();
     const packingType = document.getElementById('ordPacking').value;
-    const folderName = document.getElementById('ordFolder').value;
+    const folderName = document.getElementById('ordFolder').value.trim().toUpperCase();
     const remarks = document.getElementById('ordRemarks').value.trim();
 
     if (!firmId) return alert('Pehle Settings me Firm add karein!');
     if (!partyName) return alert('Party Name (M/s.) daalna zaroori hai!');
+    if (!folderName) return alert('Folder / Fold likhna zaroori hai (e.g. MISHRI)!');
     if (!orderState.items.length) return alert('Kam se kam 1 Saree add karein!');
+
+    // Naya Folder naam auto-save for future suggestions
+    await dbPut('folders', { name: folderName });
 
     const parties = await dbGetAll('parties');
     const exParty = parties.find((p) => p.name.toUpperCase() === partyName);
     const partyObj = exParty
-      ? { ...exParty, name: partyName, city: partyCity || exParty.city, marka: marka || exParty.marka, transport: transport || exParty.transport }
-      : { name: partyName, city: partyCity, address: partyCity, phone: '', marka, transport };
+      ? {
+          ...exParty, name: partyName,
+          city: partyCity || exParty.city,
+          agent: agent || exParty.agent || '',
+          marka: marka || exParty.marka,
+          transport: transport || exParty.transport
+        }
+      : { name: partyName, city: partyCity, address: partyCity, agent, phone: '', marka, transport };
     const savedPartyId = await dbPut('parties', partyObj);
 
     const orderId = await dbPut('orders', {
-      orderNo, date, firmId, partyId: savedPartyId, partyName, partyCity,
+      orderNo, date, firmId, partyId: savedPartyId, partyName, partyCity, agent,
       items: orderState.items, marka, transport, packingType, folderName, remarks,
       createdAt: Date.now()
     });
@@ -368,8 +378,9 @@ async function printOrderById(id) {
         </div>
       </div>
 
-      <div style="padding:6px 0; border-bottom:1px solid #000; font-size:12.5px;">
-        <b>M/s.:</b> ${esc(o.partyName)} &nbsp;&nbsp;|&nbsp;&nbsp; <b>City:</b> ${esc(o.partyCity || '')}
+      <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; padding:6px 0; border-bottom:1px solid #000; font-size:12.5px;">
+        <div><b>M/s.:</b> ${esc(o.partyName)} &nbsp;|&nbsp; <b>City:</b> ${esc(o.partyCity || '')}</div>
+        ${o.agent ? `<div><b>Agent:</b> ${esc(o.agent)}</div>` : ''}
       </div>
 
       <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11.5px;">
