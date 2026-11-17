@@ -1,6 +1,61 @@
-// === SimpliTex Module 3: Order Form (Agent Box + Manual Fold + Universal Pager) ===
+// === SimpliTex Module 3: Order Form (Agent Box + Manual Fold + Live Fulfillment Status) ===
 
-let orderState = { view: 'FORM', items: [] };
+let orderState = { view: 'FORM', items: [], filter: 'ALL' };
+
+window.stxComputeOrderStatus = function (order, allChallans) {
+  const ordNo = String(order.orderNo);
+  const ordParty = String(order.partyName || '').trim().toUpperCase();
+  const linkedChallans = (allChallans || []).filter(
+    (c) => String(c.orderNo || '') === ordNo &&
+           (!c.partyName || String(c.partyName).trim().toUpperCase() === ordParty)
+  );
+
+  const sentMap = {};
+  linkedChallans.forEach((c) => {
+    (c.items || []).forEach((it) => {
+      const key = String(it.designName || '').trim().toUpperCase();
+      sentMap[key] = (sentMap[key] || 0) + (Number(it.qty) || 0);
+    });
+  });
+
+  const remainingPool = { ...sentMap };
+  let totalOrdered = 0;
+  let totalSent = 0;
+  let totalPending = 0;
+
+  const itemBreakdown = (order.items || []).map((it) => {
+    const key = String(it.name || '').trim().toUpperCase();
+    const ordQty = Number(it.qty) || 0;
+    const availSent = remainingPool[key] || 0;
+    const usedSent = Math.min(ordQty, availSent);
+    remainingPool[key] = Math.max(0, availSent - usedSent);
+
+    const pendingQty = Math.max(0, ordQty - usedSent);
+    totalOrdered += ordQty;
+    totalSent += usedSent;
+    totalPending += pendingQty;
+
+    return {
+      name: it.name,
+      unit: it.unit || 'Pcs',
+      rate: it.rate,
+      orderedQty: ordQty,
+      sentQty: usedSent,
+      pendingQty
+    };
+  });
+
+  const isComplete = (order.items || []).length > 0 && totalPending === 0;
+  return {
+    orderNo: order.orderNo,
+    totalOrdered,
+    totalSent,
+    totalPending,
+    isComplete,
+    linkedChallansCount: linkedChallans.length,
+    items: itemBreakdown
+  };
+};
 
 function ensureOrderPrintSetup(pageCss) {
   if (!document.getElementById('simplitexPrintRoot')) {
@@ -52,15 +107,42 @@ window.handleModuleEscape = function () {
   return false;
 };
 
+function setOrderListFilter(mode) {
+  orderState.filter = mode;
+  if (window._stxPagerState && window._stxPagerState['ordersListPager']) {
+    window._stxPagerState['ordersListPager'].page = 1;
+  }
+  renderOrderModule();
+}
+
 async function renderOrderModule() {
   await openDB();
   ensureOrderPrintSetup();
   const box = document.getElementById('tab-order');
 
-  // === SAVED ORDERS LIST (Universal Search + 15-Row Pagination) ===
+  // === SAVED ORDERS LIST (Universal Search + 15-Row Pagination + Pending Status) ===
   if (orderState.view === 'LIST') {
     const orders = (await dbGetAll('orders')).sort((a, b) => b.id - a.id);
+    const allChallans = await dbGetAll('challans');
     const firms = await dbGetAll('firms');
+
+    const enriched = orders.map((o) => ({
+      order: o,
+      status: window.stxComputeOrderStatus(o, allChallans)
+    }));
+
+    const pendingCount = enriched.filter((x) => !x.status.isComplete).length;
+    const completeCount = enriched.filter((x) => x.status.isComplete).length;
+
+    const filteredRows = enriched.filter((x) => {
+      if (orderState.filter === 'PENDING') return !x.status.isComplete;
+      if (orderState.filter === 'COMPLETE') return x.status.isComplete;
+      return true;
+    });
+
+    const fBtn = (mode) => orderState.filter === mode
+      ? 'background:#0b0d12; color:#fff; border:1px solid #0b0d12;'
+      : 'background:#f3f4f6; color:#111827; border:1px solid #d1d5db;';
 
     box.innerHTML = `
       <div class="card">
@@ -71,23 +153,46 @@ async function renderOrderModule() {
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+          <button type="button" class="btn btn-sm" style="${fBtn('ALL')}" onclick="setOrderListFilter('ALL')">Sabhi (${orders.length})</button>
+          <button type="button" class="btn btn-sm" style="${fBtn('PENDING')}" onclick="setOrderListFilter('PENDING')">⏳ Pending (${pendingCount})</button>
+          <button type="button" class="btn btn-sm" style="${fBtn('COMPLETE')}" onclick="setOrderListFilter('COMPLETE')">✅ Complete (${completeCount})</button>
+        </div>
+
         <div id="ordersListPager"></div>
       </div>
     `;
 
     mountPagedList({
       id: 'ordersListPager',
-      items: orders,
+      items: filteredRows,
       perPage: 15,
       placeholder: '🔍 Order No., Party, Agent, City, Transport, Saree ya Fold search karein...',
-      headHtml: '<tr><th>Order #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Agent</th><th>Items</th><th>Pack / Fold</th><th>Action</th></tr>',
-      getSearchText: (o) => {
+      headHtml: '<tr><th>Order #</th><th>Date</th><th>Firm</th><th>Party & City</th><th>Agent</th><th>Items & Baki Maal</th><th>Status</th><th>Action</th></tr>',
+      getSearchText: (row) => {
+        const o = row.order;
         const f = firms.find((x) => x.id === Number(o.firmId));
         const itemNames = (o.items || []).map((it) => it.name).join(' ');
-        return `${o.orderNo} ${o.date} ${f ? f.shortCode : ''} ${o.partyName} ${o.partyCity || ''} ${o.agent || ''} ${o.transport || ''} ${o.folderName || ''} ${itemNames}`;
+        const stTxt = row.status.isComplete ? 'COMPLETE PURA' : 'PENDING BAKI';
+        return `${o.orderNo} ${o.date} ${f ? f.shortCode : ''} ${o.partyName} ${o.partyCity || ''} ${o.agent || ''} ${o.transport || ''} ${o.folderName || ''} ${itemNames} ${stTxt}`;
       },
-      renderRow: (o) => {
+      renderRow: (row) => {
+        const o = row.order;
+        const st = row.status;
         const f = firms.find((x) => x.id === Number(o.firmId));
+
+        const itemLines = st.items.map((it) => {
+          if (it.pendingQty === 0) {
+            return `<span style="color:#15803d;">${esc(it.name)} (✅ ${it.orderedQty})</span>`;
+          }
+          return `<span style="color:#b45309;"><b>${esc(it.name)}: ${it.pendingQty}/${it.orderedQty} baki</b></span>`;
+        }).join(', ');
+
+        const statusBadge = st.isComplete
+          ? `<span style="background:#dcfce7; color:#15803d; padding:3px 8px; border-radius:6px; font-weight:700; font-size:11px; white-space:nowrap;">✅ Pura Ho Gaya</span>`
+          : `<span style="background:#fef3c7; color:#b45309; padding:3px 8px; border-radius:6px; font-weight:700; font-size:11px; white-space:nowrap;">⏳ ${st.totalPending} / ${st.totalOrdered} Baki</span>`;
+
         return `
           <tr>
             <td><b>#${esc(o.orderNo)}</b></td>
@@ -95,8 +200,8 @@ async function renderOrderModule() {
             <td><b>${esc(f ? f.shortCode : '-')}</b></td>
             <td><b>${esc(o.partyName)}</b><br/><small>${esc(o.partyCity || '')}</small></td>
             <td><small><b>${esc(o.agent || '-')}</b></small></td>
-            <td>${(o.items || []).length} Designs</td>
-            <td>${esc(o.packingType || '')} / <b>${esc(o.folderName || '')}</b></td>
+            <td><small>${itemLines}</small><br/><small style="color:#6b7280;">${esc(o.packingType || '')} / ${esc(o.folderName || '')}</small></td>
+            <td>${statusBadge}</td>
             <td style="white-space:nowrap;">
               <button class="btn btn-dark btn-sm" onclick="printOrderById(${o.id})">🖨️ Print</button>
               <button class="btn btn-danger btn-sm" onclick="deleteOrderById(${o.id})">X</button>
@@ -104,7 +209,7 @@ async function renderOrderModule() {
           </tr>
         `;
       },
-      emptyHtml: '<tr><td colspan="8">Abhi koi Order save nahi hai</td></tr>'
+      emptyHtml: '<tr><td colspan="8">Koi Order nahi mila</td></tr>'
     });
     return;
   }
@@ -117,7 +222,6 @@ async function renderOrderModule() {
   const allOrders = await dbGetAll('orders');
   const nextOrderNo = allOrders.length ? Math.max(...allOrders.map((o) => Number(o.orderNo) || 0)) + 1 : 1;
 
-  // Unique Agents list for autocomplete
   const agentSet = new Set();
   parties.forEach((p) => { if (p.agent) agentSet.add(p.agent.toUpperCase()); });
   allOrders.forEach((o) => { if (o.agent) agentSet.add(o.agent.toUpperCase()); });
@@ -126,7 +230,7 @@ async function renderOrderModule() {
     <div class="card">
       <div class="card-head">
         <h2>3. Order Form (Rate Fix & Order Entry)</h2>
-        <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['ordersListPager']; orderState.view='LIST'; renderOrderModule();">
+        <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['ordersListPager']; orderState.filter='ALL'; orderState.view='LIST'; renderOrderModule();">
           📋 Saved Orders (${allOrders.length})
         </button>
       </div>
@@ -318,7 +422,6 @@ async function saveOrderForm() {
     if (!folderName) return alert('Folder / Fold likhna zaroori hai (e.g. MISHRI)!');
     if (!orderState.items.length) return alert('Kam se kam 1 Saree add karein!');
 
-    // Naya Folder naam auto-save for future suggestions
     await dbPut('folders', { name: folderName });
 
     const parties = await dbGetAll('parties');
