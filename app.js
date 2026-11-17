@@ -1,8 +1,8 @@
-// === SimpliTex Core App, Tally Keyboard (Enter + Backspace), Universal Pager & Lock ===
+// === SimpliTex Core App, Tally Keyboard (Enter + Backspace), Universal Pager & Stock Tabs ===
 const MASTER_SECRET = 'SIMPLITEX_MAU_2026_SECRET';
 const JW_POOL_KEY = '__JW_POOL__';
+let stockTabMode = 'BUNKAR'; // 'BUNKAR' | 'JW_WAPSI' | 'BARCODE'
 
-// Service Worker
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
@@ -227,7 +227,7 @@ function drawPagedBody(id) {
   `;
 }
 
-// 5. Navigation & Stock Drilldown (with Search + 15-Row Pagination)
+// 5. Navigation & Stock Drilldown (3 Clean Top Buttons: Bunkar | Job Work se Wapsi | Barcode Stock)
 function getActiveSection() {
   return document.querySelector('.tab-sec:not(.hidden)');
 }
@@ -251,13 +251,24 @@ function openTabByName(tabId) {
   openTab(tabId, idx >= 0 ? btns[idx] : null);
 }
 
-async function openStockDrilldown() {
+async function openStockDrilldown(mode) {
+  if (mode) stockTabMode = mode;
   openTab('tab-stock-detail', null);
   await openDB();
+
   const allBunkar = await dbGetAll('bunkarStock');
   const bunkarOnly = allBunkar.filter((b) => b.bunkarName !== JW_POOL_KEY && b.qty > 0);
+  const bunkarTotal = bunkarOnly.reduce((s, x) => s + (x.qty || 0), 0);
+
   const jwPool = allBunkar.find((b) => b.bunkarName === JW_POOL_KEY);
+  const jwPoolQty = jwPool ? jwPool.qty : 0;
+
   const ready = (await dbGetAll('readyStock')).filter((r) => r.qty > 0);
+  const readyTotal = ready.reduce((s, x) => s + (x.qty || 0), 0);
+
+  const btnStyle = (m) => stockTabMode === m
+    ? 'background:#0b0d12; color:#fff; border:1px solid #0b0d12;'
+    : 'background:#f3f4f6; color:#111827; border:1px solid #d1d5db;';
 
   const sec = document.getElementById('tab-stock-detail');
   sec.innerHTML = `
@@ -267,45 +278,90 @@ async function openStockDrilldown() {
         <button class="btn btn-light btn-sm" onclick="openTabByName('tab-dash')">← Back (Esc)</button>
       </div>
 
-      <h3 style="font-size:14px; margin:8px 0;">1. Bunkar-Wise Stock (Click for Passbook)</h3>
-      <div id="stockBunkarPager"></div>
-
-      <h3 style="font-size:14px; margin:16px 0 6px;">2. Job Work se Wapas Pool</h3>
-      <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:10px 14px; border-radius:8px; font-weight:700; color:#1e3a8a;">
-        Total Job Work Returned Pool: <span id="stockDetailJWPool">${jwPool ? jwPool.qty : 0}</span> Pcs
+      <!-- 3 Clean Top Filter Buttons -->
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+        <button type="button" class="btn" style="${btnStyle('BUNKAR')}" onclick="openStockDrilldown('BUNKAR')">
+          🧵 Bunkar Stock (${bunkarTotal} Pcs)
+        </button>
+        <button type="button" class="btn" style="${btnStyle('JW_WAPSI')}" onclick="openStockDrilldown('JW_WAPSI')">
+          ↩️ Job Work se Wapsi (${jwPoolQty} Pcs)
+        </button>
+        <button type="button" class="btn" style="${btnStyle('BARCODE')}" onclick="openStockDrilldown('BARCODE')">
+          🏷️ Barcode Stock (${readyTotal} Pcs)
+        </button>
       </div>
 
-      <h3 style="font-size:14px; margin:16px 0 6px;">3. Ready Barcoded Stock (Design Wise)</h3>
-      <div id="stockReadyPager"></div>
+      <div id="stockTabContent"></div>
     </div>
   `;
 
-  mountPagedList({
-    id: 'stockBunkarPager',
-    items: bunkarOnly,
-    perPage: 15,
-    placeholder: '🔍 Bunkar search karein...',
-    headHtml: '<tr><th>Bunkar / Saree Naam</th><th>Available Pcs</th></tr>',
-    getSearchText: (b) => b.bunkarName,
-    renderRow: (b) => `
-      <tr style="cursor:pointer;" onclick="if(typeof openBunkarPassbook==='function') openBunkarPassbook('${b.bunkarName}')">
-        <td><b style="color:#1d4ed8; text-decoration:underline;">${b.bunkarName}</b> <small>(Passbook)</small></td>
-        <td><b>${b.qty} Pcs</b></td>
-      </tr>
-    `,
-    emptyHtml: '<tr><td colspan="2">Koi Bunkar stock nahi hai</td></tr>'
-  });
+  const content = document.getElementById('stockTabContent');
 
-  mountPagedList({
-    id: 'stockReadyPager',
-    items: ready,
-    perPage: 15,
-    placeholder: '🔍 Design ya Firm search karein...',
-    headHtml: '<tr><th>Design & Firm</th><th>Available Pcs</th></tr>',
-    getSearchText: (r) => `${r.designName} ${r.firmCode} ${r.specLine || ''}`,
-    renderRow: (r) => `<tr><td><b>${r.designName} (${r.firmCode})</b></td><td><b>${r.qty} Pcs</b></td></tr>`,
-    emptyHtml: '<tr><td colspan="2">Abhi koi Ready Barcoded stock nahi hai</td></tr>'
-  });
+  if (stockTabMode === 'BUNKAR') {
+    content.innerHTML = `<div id="stockBunkarPager"></div>`;
+    mountPagedList({
+      id: 'stockBunkarPager',
+      items: bunkarOnly,
+      perPage: 15,
+      placeholder: '🔍 Bunkar search karein...',
+      headHtml: '<tr><th>Bunkar / Saree Naam (Click for Passbook)</th><th>Available Pcs</th></tr>',
+      getSearchText: (b) => b.bunkarName,
+      renderRow: (b) => `
+        <tr style="cursor:pointer;" onclick="if(typeof openBunkarPassbook==='function') openBunkarPassbook('${b.bunkarName}')">
+          <td><b style="color:#1d4ed8; text-decoration:underline;">${b.bunkarName}</b> <small>(Passbook)</small></td>
+          <td><b>${b.qty} Pcs</b></td>
+        </tr>
+      `,
+      emptyHtml: '<tr><td colspan="2">Koi Bunkar stock nahi hai</td></tr>'
+    });
+  } else if (stockTabMode === 'JW_WAPSI') {
+    const jwReturns = (await dbGetAll('jobWorkLedger'))
+      .filter((l) => l.direction === 'IN' && l.jobWorkType !== 'DIRECT_BAITHAK')
+      .sort((a, b) => b.createdAt - a.createdAt);
+
+    content.innerHTML = `
+      <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px 14px; border-radius:8px; font-weight:700; color:#1e3a8a; margin-bottom:12px;">
+        Available Job Work se Wapas Pool (Barcoding / Next Work ke liye): <span style="font-size:18px;">${jwPoolQty} Pcs</span>
+      </div>
+      <div id="stockJWWapsiPager"></div>
+    `;
+    mountPagedList({
+      id: 'stockJWWapsiPager',
+      items: jwReturns,
+      perPage: 15,
+      placeholder: '🔍 Date, Job Work ya Worker search karein...',
+      headHtml: '<tr><th>Date</th><th>Job Work</th><th>Worker Name</th><th>Wapas Pcs</th><th>Note</th></tr>',
+      getSearchText: (l) => `${l.date} ${l.jobWorkType} ${l.workerName} ${l.note || ''}`,
+      renderRow: (l) => `
+        <tr>
+          <td style="white-space:nowrap;">${l.date}</td>
+          <td><b>${l.jobWorkType}</b></td>
+          <td><b>${l.workerName}</b></td>
+          <td><b style="color:#15803d;">+${l.qty} Pcs</b></td>
+          <td><small>${l.note || '-'}</small></td>
+        </tr>
+      `,
+      emptyHtml: '<tr><td colspan="5">Abhi Job Work se koi wapsi entry nahi hui</td></tr>'
+    });
+  } else if (stockTabMode === 'BARCODE') {
+    content.innerHTML = `<div id="stockReadyPager"></div>`;
+    mountPagedList({
+      id: 'stockReadyPager',
+      items: ready,
+      perPage: 15,
+      placeholder: '🔍 Design Name, Firm Code ya Quality search karein...',
+      headHtml: '<tr><th>Design & Firm</th><th>Quality / Line</th><th>Available Pcs</th></tr>',
+      getSearchText: (r) => `${r.designName} ${r.firmCode} ${r.specLine || ''}`,
+      renderRow: (r) => `
+        <tr>
+          <td><b>${r.designName} (${r.firmCode})</b></td>
+          <td><small>${r.specLine || '-'}</small></td>
+          <td><b style="color:#15803d;">${r.qty} Pcs</b></td>
+        </tr>
+      `,
+      emptyHtml: '<tr><td colspan="3">Abhi koi Ready Barcoded stock nahi hai</td></tr>'
+    });
+  }
 }
 
 // 6. TALLY KEYBOARD ENGINE (Enter = Next, Backspace / Shift+Enter = Step Back, Esc = Back Screen)
@@ -355,7 +411,7 @@ document.addEventListener('keydown', (e) => {
 
   if (e.altKey) {
     const map = { '0':'tab-dash', '1':'tab-jobwork', '2':'tab-inward', '3':'tab-order', '4':'tab-barcode', '5':'tab-challan', '7':'tab-settings' };
-    if (e.key === '6') { e.preventDefault(); openStockDrilldown(); return; }
+    if (e.key === '6') { e.preventDefault(); openStockDrilldown('BUNKAR'); return; }
     if (e.key === '8' && document.getElementById('tab-daybook')) { e.preventDefault(); openTab('tab-daybook', document.getElementById('navBtnDaybook')); return; }
     if (map[e.key]) { e.preventDefault(); openTabByName(map[e.key]); return; }
   }
@@ -381,14 +437,12 @@ document.addEventListener('keydown', (e) => {
   const sec = getActiveSection();
   if (!sec) return;
 
-  // Shift + Enter -> Hamesha 1 step piche box me
   if (e.key === 'Enter' && e.shiftKey && (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON')) {
     e.preventDefault();
     focusPrevField(el);
     return;
   }
 
-  // Backspace -> Box khali ho / shuru me ho / Select ya Button ho toh 1 step piche box me
   if (e.key === 'Backspace') {
     if (tag === 'SELECT' || tag === 'BUTTON') {
       e.preventDefault();
@@ -407,7 +461,6 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Enter -> Agle box me
   if (e.key === 'Enter' && (tag === 'INPUT' || tag === 'SELECT')) {
     if (el.dataset.customEnter === '1') return;
     e.preventDefault();
@@ -415,7 +468,6 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Arrow Up/Down & 1-9 on Selectable Lists
   const visibleList = Array.from(sec.querySelectorAll('.kbd-list')).find((l) => l.offsetParent !== null);
   if (visibleList && !isTyping) {
     if (e.key === 'ArrowDown') { e.preventDefault(); moveListSelection(visibleList, 1); return; }
