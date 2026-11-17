@@ -1,4 +1,4 @@
-// === SimpliTex Database Engine v5 (Dual Mode: IndexedDB + Offline Multi-PC LAN Server) ===
+// === SimpliTex Database Engine v6 (Dual Mode: IndexedDB + LAN + Karigar-Wise JW Wapsi & Progress Engine) ===
 const DB_NAME = 'SimpliTexDB';
 const DB_VERSION = 3;
 let dbInstance = null;
@@ -155,10 +155,8 @@ function stxInitLanMode() {
         window.STX_LAN_MODE = true;
         window.STX_LAN_INFO = data;
 
-        // Server se shared settings/opening stock/license turant sync karein
         await stxSyncSharedMeta().catch(() => {});
 
-        // Agar Server par abhi shared keys nahi hain aur localStorage me maujood hain, toh initial push karein
         const metaRes = await stxApiFetch('/api/meta').catch(() => null);
         const serverMeta = (metaRes && metaRes.sharedStorage) || {};
         const initialPatch = {};
@@ -442,56 +440,230 @@ async function dbDelete(storeName, key) {
   });
 }
 
-// === SHARED 4-STAGE STOCK COMPUTATION ===
-function stxComputeStockMaps(opening, jwLedger, bcLogs, challans) {
-  const bunkarMap = {};
-  const convertedMap = {};
+// === KARIGAR-WISE FIFO JOB WORK ANALYTICS & WAPSI ALLOCATION ===
+function stxComputeJWAnalytics(opening, jwLedger) {
+  const bunkarDeltaMap = {};
   const pendingMap = {};
-  const readyMap = {};
+  const openingRemMap = {};
+  const workerQueueMap = {};
+  const outProgressMap = {};
+  const inAllocMap = {};
 
-  // 1. Year Closing Opening Stock
   if (opening) {
     (opening.bunkarStock || []).forEach((b) => {
-      if (b && b.bunkarName) bunkarMap[b.bunkarName] = (bunkarMap[b.bunkarName] || 0) + (Number(b.qty) || 0);
-    });
-    (opening.convertedStock || []).forEach((c) => {
-      if (c && c.designName) convertedMap[c.designName] = { designName: c.designName, specLine: c.specLine || '', qty: Number(c.qty) || 0 };
+      if (b && b.bunkarName) {
+        bunkarDeltaMap[b.bunkarName] = (bunkarDeltaMap[b.bunkarName] || 0) + (Number(b.qty) || 0);
+      }
     });
     (opening.jobWorkPending || []).forEach((p) => {
-      if (p && p.id) pendingMap[p.id] = { id: p.id, workerName: p.workerName, jobWorkType: p.jobWorkType, qty: Number(p.qty) || 0 };
+      if (p && p.id) {
+        const q = Number(p.qty) || 0;
+        pendingMap[p.id] = { id: p.id, workerName: p.workerName, jobWorkType: p.jobWorkType, qty: q };
+        openingRemMap[p.id] = (openingRemMap[p.id] || 0) + q;
+      }
+    });
+  }
+
+  const sorted = [...(jwLedger || [])].sort((a, b) => {
+    const dA = String(a?.date || '');
+    const dB = String(b?.date || '');
+    if (dA !== dB) return dA.localeCompare(dB);
+    const cA = Number(a?.createdAt) || 0;
+    const cB = Number(b?.createdAt) || 0;
+    if (cA !== cB) return cA - cB;
+    if (a?.direction !== b?.direction) return a?.direction === 'OUT' ? -1 : 1;
+    return (Number(a?.id) || 0) - (Number(b?.id) || 0);
+  });
+
+  function addAlloc(allocList, bunkarName, qty) {
+    if (!qty || qty <= 0) return;
+    const existing = allocList.find((x) => x.bunkarName === bunkarName);
+    if (existing) existing.qty += qty;
+    else allocList.push({ bunkarName, qty });
+  }
+
+  sorted.forEach((l) => {
+    if (!l) return;
+    const qty = Math.max(0, Number(l.qty) || 0);
+
+    if (l.direction === 'IN' && l.jobWorkType === 'DIRECT_BAITHAK') {
+      if (l.bunkarName) {
+        bunkarDeltaMap[l.bunkarName] = (bunkarDeltaMap[l.bunkarName] || 0) + qty;
+      }
+      return;
+    }
+
+    const wName = String(l.workerName || '').toUpperCase();
+    const jwType = String(l.jobWorkType || '').toUpperCase();
+    const pendId = `${wName}__${jwType}`;
+
+    if (l.direction === 'OUT') {
+      if (!pendingMap[pendId]) {
+        pendingMap[pendId] = { id: pendId, workerName: wName, jobWorkType: jwType, qty: 0 };
+      }
+      pendingMap[pendId].qty += qty;
+
+      if (!workerQueueMap[pendId]) workerQueueMap[pendId] = [];
+
+      const progItems = [];
+      let batchSum = 0;
+      (l.batchItems || []).forEach((row) => {
+        if (!row || !row.bunkarName) return;
+        const rQty = Math.max(0, Number(row.qty) || 0);
+        if (rQty <= 0) return;
+        bunkarDeltaMap[row.bunkarName] = (bunkarDeltaMap[row.bunkarName] || 0) - rQty;
+        batchSum += rQty;
+        const itemRef = { bunkarName: row.bunkarName, sentQty: rQty, okQty: 0, damageQty: 0, pendingQty: rQty };
+        progItems.push(itemRef);
+        workerQueueMap[pendId].push({
+          ledgerId: l.id,
+          date: l.date,
+          jobWorkNo: l.jobWorkNo,
+          bunkarName: row.bunkarName,
+          remQty: rQty,
+          itemRef
+        });
+      });
+
+      if (qty > batchSum) {
+        const extra = qty - batchSum;
+        const itemRef = { bunkarName: '__JW_POOL__', sentQty: extra, okQty: 0, damageQty: 0, pendingQty: extra };
+        progItems.push(itemRef);
+        workerQueueMap[pendId].push({
+          ledgerId: l.id,
+          date: l.date,
+          jobWorkNo: l.jobWorkNo,
+          bunkarName: '__JW_POOL__',
+          remQty: extra,
+          itemRef
+        });
+      }
+
+      if (l.id !== undefined && l.id !== null) {
+        outProgressMap[l.id] = {
+          id: l.id,
+          totalQty: qty,
+          okQty: 0,
+          damageQty: 0,
+          pendingQty: qty,
+          items: progItems
+        };
+      }
+      return;
+    }
+
+    if (l.direction === 'IN') {
+      const damageQty = Math.max(0, Number(l.damageQty) || 0);
+      const totalCleared = qty + damageQty;
+
+      if (!pendingMap[pendId]) {
+        pendingMap[pendId] = { id: pendId, workerName: wName, jobWorkType: jwType, qty: 0 };
+      }
+      pendingMap[pendId].qty -= totalCleared;
+
+      if (!workerQueueMap[pendId]) workerQueueMap[pendId] = [];
+      const queue = workerQueueMap[pendId];
+      const allocList = [];
+
+      let okLeft = qty;
+      let dmgLeft = damageQty;
+
+      // 1. Pehle Year-Closing Opening Pending (agar hai) clear karein
+      let openRem = openingRemMap[pendId] || 0;
+      if (openRem > 0 && okLeft > 0) {
+        const take = Math.min(openRem, okLeft);
+        openRem -= take;
+        okLeft -= take;
+        bunkarDeltaMap['__JW_POOL__'] = (bunkarDeltaMap['__JW_POOL__'] || 0) + take;
+        addAlloc(allocList, '__JW_POOL__', take);
+      }
+      if (openRem > 0 && dmgLeft > 0) {
+        const takeDmg = Math.min(openRem, dmgLeft);
+        openRem -= takeDmg;
+        dmgLeft -= takeDmg;
+      }
+      openingRemMap[pendId] = openRem;
+
+      // 2. OK Wapsi Pcs ko FIFO Karigar batches me wapas daalein
+      for (let i = 0; i < queue.length && okLeft > 0; i++) {
+        const qNode = queue[i];
+        if (qNode.remQty <= 0) continue;
+        const take = Math.min(qNode.remQty, okLeft);
+        qNode.remQty -= take;
+        okLeft -= take;
+
+        // Karigar ke naam par hi stock wapas save hoga
+        bunkarDeltaMap[qNode.bunkarName] = (bunkarDeltaMap[qNode.bunkarName] || 0) + take;
+        addAlloc(allocList, qNode.bunkarName, take);
+
+        qNode.itemRef.okQty += take;
+        qNode.itemRef.pendingQty = Math.max(0, qNode.itemRef.pendingQty - take);
+        if (outProgressMap[qNode.ledgerId]) {
+          outProgressMap[qNode.ledgerId].okQty += take;
+          outProgressMap[qNode.ledgerId].pendingQty = Math.max(0, outProgressMap[qNode.ledgerId].pendingQty - take);
+        }
+      }
+
+      // 3. Damage / Shortage Pcs sirf pending kam karengi (stock me wapas nahi judengi)
+      for (let i = 0; i < queue.length && dmgLeft > 0; i++) {
+        const qNode = queue[i];
+        if (qNode.remQty <= 0) continue;
+        const takeDmg = Math.min(qNode.remQty, dmgLeft);
+        qNode.remQty -= takeDmg;
+        dmgLeft -= takeDmg;
+
+        qNode.itemRef.damageQty += takeDmg;
+        qNode.itemRef.pendingQty = Math.max(0, qNode.itemRef.pendingQty - takeDmg);
+        if (outProgressMap[qNode.ledgerId]) {
+          outProgressMap[qNode.ledgerId].damageQty += takeDmg;
+          outProgressMap[qNode.ledgerId].pendingQty = Math.max(0, outProgressMap[qNode.ledgerId].pendingQty - takeDmg);
+        }
+      }
+
+      // 4. Agar pending se zyada OK wapsi aayi ho toh fallback Pool me safe rakhein
+      if (okLeft > 0) {
+        bunkarDeltaMap['__JW_POOL__'] = (bunkarDeltaMap['__JW_POOL__'] || 0) + okLeft;
+        addAlloc(allocList, '__JW_POOL__', okLeft);
+      }
+
+      if (l.id !== undefined && l.id !== null) {
+        inAllocMap[l.id] = allocList;
+      }
+    }
+  });
+
+  return { bunkarDeltaMap, pendingMap, workerQueueMap, outProgressMap, inAllocMap };
+}
+window.stxComputeJWAnalytics = stxComputeJWAnalytics;
+
+async function stxGetJWAnalytics() {
+  let opening = null;
+  try {
+    opening = JSON.parse(localStorage.getItem('simplitex_opening_stock') || 'null');
+  } catch (_) {}
+  const jwLedger = await dbGetAll('jobWorkLedger');
+  return stxComputeJWAnalytics(opening, jwLedger);
+}
+window.stxGetJWAnalytics = stxGetJWAnalytics;
+
+// === SHARED 4-STAGE STOCK COMPUTATION ===
+function stxComputeStockMaps(opening, jwLedger, bcLogs, challans) {
+  const { bunkarDeltaMap, pendingMap } = stxComputeJWAnalytics(opening, jwLedger);
+  const bunkarMap = { ...bunkarDeltaMap };
+  const convertedMap = {};
+  const readyMap = {};
+
+  // 1. Year Closing Opening Stock (Converted & Ready)
+  if (opening) {
+    (opening.convertedStock || []).forEach((c) => {
+      if (c && c.designName) convertedMap[c.designName] = { designName: c.designName, specLine: c.specLine || '', qty: Number(c.qty) || 0 };
     });
     (opening.readyStock || []).forEach((r) => {
       if (r && r.skuKey) readyMap[r.skuKey] = { ...r, qty: Number(r.qty) || 0 };
     });
   }
 
-  // 2. Replay Job Work & Direct Baithak Ledger
-  (jwLedger || []).forEach((l) => {
-    const qty = Number(l.qty) || 0;
-    if (l.direction === 'IN' && l.jobWorkType === 'DIRECT_BAITHAK') {
-      if (l.bunkarName) bunkarMap[l.bunkarName] = (bunkarMap[l.bunkarName] || 0) + qty;
-    } else if (l.direction === 'OUT') {
-      (l.batchItems || []).forEach((row) => {
-        if (row && row.bunkarName) {
-          bunkarMap[row.bunkarName] = (bunkarMap[row.bunkarName] || 0) - (Number(row.qty) || 0);
-        }
-      });
-      const pendId = `${l.workerName}__${l.jobWorkType}`;
-      if (!pendingMap[pendId]) {
-        pendingMap[pendId] = { id: pendId, workerName: l.workerName, jobWorkType: l.jobWorkType, qty: 0 };
-      }
-      pendingMap[pendId].qty += qty;
-    } else if (l.direction === 'IN') {
-      const pendId = `${l.workerName}__${l.jobWorkType}`;
-      if (!pendingMap[pendId]) {
-        pendingMap[pendId] = { id: pendId, workerName: l.workerName, jobWorkType: l.jobWorkType, qty: 0 };
-      }
-      pendingMap[pendId].qty -= qty;
-      bunkarMap['__JW_POOL__'] = (bunkarMap['__JW_POOL__'] || 0) + qty;
-    }
-  });
-
-  // 3. Replay Stock Convert & Manual Barcoding Logs
+  // 2. Replay Stock Convert & Manual Barcoding Logs
   (bcLogs || []).forEach((b) => {
     const qty = Number(b.qty) || 0;
     if (b.mode === 'STOCK_CONVERT') {
@@ -535,7 +707,7 @@ function stxComputeStockMaps(opening, jwLedger, bcLogs, challans) {
     }
   });
 
-  // 4. Replay Challans
+  // 3. Replay Challans
   (challans || []).forEach((c) => {
     (c.items || []).forEach((it) => {
       const skuKey = it.skuKey || `${it.designName}__${it.firmCode}`;
