@@ -1,6 +1,11 @@
-// === SimpliTex Module 3 v4: Order Form (Edit Order + Aligned Boxes + Fast Fulfillment Status + Multi-PC Order No Guard) ===
+// === SimpliTex Module 3 v5: Pro Order Form (Toast/Modal + 2-Card Clean Layout + Multi-PC Order No Guard) ===
 
 let orderState = { view: 'FORM', items: [], filter: 'ALL', editId: null, origCreatedAt: null, draft: null, autoOrderNo: null };
+
+function ordNotify(msg, type = 'info') {
+  if (typeof window.stxToast === 'function') window.stxToast(msg, type);
+  else alert(msg);
+}
 
 window.stxComputeOrderStatus = function (order, allChallans) {
   const ordNo = String(order.orderNo);
@@ -165,8 +170,8 @@ async function renderOrderModule() {
     });
 
     const fBtn = (mode) => orderState.filter === mode
-      ? 'background:#0b0d12; color:#fff; border:1px solid #0b0d12;'
-      : 'background:#f3f4f6; color:#111827; border:1px solid #d1d5db;';
+      ? 'background:#0f172a; color:#fff; border:1px solid #0f172a;'
+      : 'background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1;';
 
     box.innerHTML = `
       <div class="card">
@@ -208,28 +213,28 @@ async function renderOrderModule() {
 
         const itemLines = st.items.map((it) => {
           if (it.pendingQty === 0) {
-            return `<span style="color:#15803d;">${esc(it.name)} (✅ ${it.orderedQty})</span>`;
+            return `<span style="color:#16a34a;">${esc(it.name)} (✅ ${it.orderedQty})</span>`;
           }
           return `<span style="color:#b45309;"><b>${esc(it.name)}: ${it.pendingQty}/${it.orderedQty} baki</b></span>`;
         }).join(', ');
 
         const statusBadge = st.isComplete
-          ? `<span style="background:#dcfce7; color:#15803d; padding:3px 8px; border-radius:6px; font-weight:700; font-size:11px; white-space:nowrap;">✅ Pura Ho Gaya</span>`
-          : `<span style="background:#fef3c7; color:#b45309; padding:3px 8px; border-radius:6px; font-weight:700; font-size:11px; white-space:nowrap;">⏳ ${st.totalPending} / ${st.totalOrdered} Baki</span>`;
+          ? `<span style="background:#dcfce7; color:#15803d; padding:3px 8px; border-radius:999px; font-weight:700; font-size:11px; white-space:nowrap;">✅ Pura</span>`
+          : `<span style="background:#fef3c7; color:#b45309; padding:3px 8px; border-radius:999px; font-weight:700; font-size:11px; white-space:nowrap;">⏳ ${st.totalPending}/${st.totalOrdered} Baki</span>`;
 
         return `
           <tr>
             <td><b>#${esc(o.orderNo)}</b></td>
             <td style="white-space:nowrap;">${esc(o.date)}</td>
             <td><b>${esc(f ? f.shortCode : '-')}</b></td>
-            <td><b>${esc(o.partyName)}</b><br/><small>${esc(o.partyCity || '')}</small></td>
+            <td><b>${esc(o.partyName)}</b><br/><small style="color:#64748b;">${esc(o.partyCity || '')}</small></td>
             <td><small><b>${esc(o.agent || '-')}</b></small></td>
-            <td><small>${itemLines}</small><br/><small style="color:#6b7280;">${esc(o.packingType || '')} / ${esc(o.folderName || '')}</small></td>
+            <td><small>${itemLines}</small><br/><small style="color:#64748b;">${esc(o.packingType || '')} / ${esc(o.folderName || '')}</small></td>
             <td>${statusBadge}</td>
             <td style="white-space:nowrap;">
-              <button class="btn btn-dark btn-sm" onclick="printOrderById(${o.id})">🖨️ Print</button>
-              <button class="btn btn-light btn-sm" onclick="editOrderById(${o.id})">✏️ Edit</button>
-              <button class="btn btn-danger btn-sm" onclick="deleteOrderById(${o.id})">X</button>
+              <button class="btn btn-dark btn-sm" title="Print" onclick="printOrderById(${o.id})">🖨️</button>
+              <button class="btn btn-light btn-sm" title="Edit" onclick="editOrderById(${o.id})">✏️</button>
+              <button class="btn btn-danger btn-sm" title="Delete" onclick="deleteOrderById(${o.id})">🗑️</button>
             </td>
           </tr>
         `;
@@ -239,7 +244,7 @@ async function renderOrderModule() {
     return;
   }
 
-  // === ORDER FORM VIEW (Create & Edit Mode — Sabhi Boxes Ekdum Seedh Me) ===
+  // === ORDER FORM VIEW ===
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
   const folders = await dbGetAll('folders');
@@ -275,7 +280,7 @@ async function renderOrderModule() {
         </div>
       </div>
 
-      ${!firms.length ? `<div style="background:#fef2f2; color:#b91c1c; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px;">
+      ${!firms.length ? `<div style="background:#fef2f2; color:#b91c1c; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px; font-weight:600;">
         ⚠️ Pehle <b>⚙️ Settings</b> me apni Firm add karein!
       </div>` : ''}
 
@@ -304,12 +309,15 @@ async function renderOrderModule() {
           </datalist>
         </div>
       </div>
+    </div>
 
-      <!-- Fast Keyboard Item Entry Box -->
-      <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:8px; margin:14px 0;">
-        <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:8px;">
-          Saree Add Karein (Enter = Aage | Khali Box me Backspace = Piche):
-        </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>📦 Saree Design & Rate Add Karein</h2>
+        <span class="shortcut-hint">Enter = Aage | Khali me Backspace = Piche</span>
+      </div>
+
+      <div style="background:#f8fafc; border:1px solid #cbd5e1; padding:12px; border-radius:10px; margin-bottom:12px;">
         <div class="grid-2" style="align-items:start;">
           <div>
             <label>Particulars (Saree / Design Name) *</label>
@@ -346,8 +354,7 @@ async function renderOrderModule() {
         </table>
       </div>
 
-      <!-- Bottom Section (Manual Fold + Aligned) -->
-      <div style="background:#f9fafb; border:1px solid #d1d5db; padding:12px; border-radius:8px; margin-top:14px;">
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:12px; border-radius:10px; margin-top:14px;">
         <div class="grid-2" style="align-items:start;">
           <div><label>Marka / Through</label><input id="ordMarka" value="${d ? esc(d.marka) : ''}" placeholder="e.g. SSS" /></div>
           <div><label>Transport</label><input id="ordTransport" value="${d ? esc(d.transport) : ''}" placeholder="e.g. VRL" /></div>
@@ -372,11 +379,11 @@ async function renderOrderModule() {
                    onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveOrderForm(); }" />
           </div>
         </div>
-      </div>
 
-      <button type="button" class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveOrderForm()">
-        ${isEdit ? '✅ Update Order Form (Ctrl+S)' : '✅ Save Order Form (Ctrl+S)'}
-      </button>
+        <button type="button" class="btn btn-success primary-save-btn" style="margin-top:12px; width:100%; height:44px; font-size:14px;" onclick="saveOrderForm()">
+          ${isEdit ? '✅ Update Order Form (Ctrl+S)' : '✅ Save Order Form (Ctrl+S)'}
+        </button>
+      </div>
     </div>
   `;
 
@@ -432,9 +439,9 @@ function addOrderItem() {
   const foldSize = document.getElementById('ordItemFoldSize').value.trim().toUpperCase();
   const cancelColor = document.getElementById('ordItemCancel').value.trim();
 
-  if (!name) { nameEl.focus(); return alert('Saree / Design ka naam daalein!'); }
-  if (!qty || qty <= 0) { qtyEl.focus(); return alert('Sahi Qty daalein!'); }
-  if (!rate || rate <= 0) { rateEl.focus(); return alert('Sahi Rate daalein!'); }
+  if (!name) { nameEl.focus(); return ordNotify('Saree / Design ka naam daalein!', 'warn'); }
+  if (!qty || qty <= 0) { qtyEl.focus(); return ordNotify('Sahi Qty daalein!', 'warn'); }
+  if (!rate || rate <= 0) { rateEl.focus(); return ordNotify('Sahi Rate daalein!', 'warn'); }
 
   orderState.items.push({ name, qty, unit, rate, foldSize, cancelColor });
   nameEl.value = '';
@@ -464,7 +471,7 @@ function renderOrderItemsTable() {
       <td>${esc(it.cancelColor || '-')}</td>
       <td><button type="button" class="btn btn-danger btn-sm" onclick="removeOrderItem(${i})">X</button></td>
     </tr>
-  `).join('') || '<tr><td colspan="7" style="color:#6b7280;">Abhi koi saree add nahi hui hai</td></tr>';
+  `).join('') || '<tr><td colspan="7" style="color:#64748b;">Abhi koi saree add nahi hui hai</td></tr>';
 }
 
 async function saveOrderForm() {
@@ -481,14 +488,13 @@ async function saveOrderForm() {
     const folderName = document.getElementById('ordFolder').value.trim().toUpperCase();
     const remarks = document.getElementById('ordRemarks').value.trim();
 
-    if (!firmId) return alert('Pehle Settings me Firm add karein!');
-    if (!partyName) return alert('Party Name (M/s.) daalna zaroori hai!');
-    if (!folderName) return alert('Folder / Fold likhna zaroori hai (e.g. MISHRI)!');
-    if (!orderState.items.length) return alert('Kam se kam 1 Saree add karein!');
+    if (!firmId) return ordNotify('Pehle Settings me Firm add karein!', 'warn');
+    if (!partyName) return ordNotify('Party Name (M/s.) daalna zaroori hai!', 'warn');
+    if (!folderName) return ordNotify('Folder / Fold likhna zaroori hai (e.g. MISHRI)!', 'warn');
+    if (!orderState.items.length) return ordNotify('Kam se kam 1 Saree add karein!', 'warn');
 
     const wasEdit = !!orderState.editId;
 
-    // Multi-PC Guard: Agar auto Order No. kisi aur PC par use ho gaya ho toh fresh number lein
     if (!wasEdit && orderState.autoOrderNo !== null && orderNo === orderState.autoOrderNo) {
       const existingSame = await dbGetByIndex('orders', 'orderNo', orderNo);
       if (existingSame && existingSame.length > 0) {
@@ -511,6 +517,7 @@ async function saveOrderForm() {
       : { name: partyName, city: partyCity, address: partyCity, agent, phone: '', marka, transport };
     const savedPartyId = await dbPut('parties', partyObj);
 
+    const totalPcs = orderState.items.reduce((s, x) => s + (Number(x.qty) || 0), 0);
     const orderPayload = {
       orderNo, date, firmId, partyId: savedPartyId, partyName, partyCity, agent,
       items: orderState.items, marka, transport, packingType, folderName, remarks,
@@ -520,22 +527,36 @@ async function saveOrderForm() {
 
     const orderId = await dbPut('orders', orderPayload);
 
-    if (confirm(`✅ Order #${orderNo} ${wasEdit ? 'Update' : 'Save'} ho gaya! Kya abhi Print / PDF nikalna hai?`)) {
-      await printOrderById(orderId);
-    }
     orderState.items = [];
     orderState.editId = null;
     orderState.origCreatedAt = null;
     orderState.draft = null;
     orderState.autoOrderNo = null;
     if (wasEdit) orderState.view = 'LIST';
-    renderOrderModule();
-  } catch (err) { alert('Order Save Error: ' + err.message); }
+    await renderOrderModule();
+
+    if (typeof window.stxOpenModal === 'function') {
+      window.stxOpenModal({
+        title: `✅ Order #${orderNo} ${wasEdit ? 'Update' : 'Save'} Ho Gaya!`,
+        bodyHtml: `
+          <div style="font-size:14px;"><b>${esc(partyName)}</b> (${esc(partyCity || '-')})</div>
+          <div style="margin-top:4px; font-weight:700; color:#0f172a;">Total: ${totalPcs} Pcs &nbsp;|&nbsp; ${esc(packingType)} / ${esc(folderName)}</div>
+        `,
+        buttons: [
+          { label: '🖨️ Order Print / PDF', className: 'btn btn-dark', onClick: () => { stxCloseModal(); printOrderById(orderId); } },
+          { label: 'Done', className: 'btn btn-success', onClick: () => stxCloseModal() }
+        ]
+      });
+    } else {
+      ordNotify(`Order #${orderNo} save ho gaya!`, 'success');
+    }
+  } catch (err) { ordNotify('Order Save Error: ' + err.message, 'error'); }
 }
 
 async function deleteOrderById(id) {
   if (!confirm('Kya ye Order delete karna hai?')) return;
   await dbDelete('orders', id);
+  ordNotify('Order delete ho gaya', 'info');
   renderOrderModule();
 }
 
