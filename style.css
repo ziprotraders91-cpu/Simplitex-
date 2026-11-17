@@ -39,13 +39,13 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .nav-btn.active { background: var(--dark); color: #fff; border-color: var(--dark); }
 
 /* Layout */
-.container { max-width: 980px; margin: 14px auto; padding: 0 12px 60px; }
+.container { max-width: 1020px; margin: 14px auto; padding: 0 12px 60px; }
 .card {
   background: var(--card); border: 1px solid var(--border);
   border-radius: 10px; padding: 16px; margin-bottom: 14px;
 }
 .card-head {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
   border-bottom: 1px solid #e5e7eb; padding-bottom: 10px; margin-bottom: 12px;
 }
 .card-head h2 { margin: 0; font-size: 16px; }
@@ -59,13 +59,47 @@ input:focus, select:focus, textarea:focus, button:focus {
 }
 button:focus { background-color: var(--primary); color: #fff; }
 
-/* Forms */
-.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
-label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
-input, select, textarea {
-  width: 100%; padding: 9px 10px; border: 1px solid var(--border);
-  border-radius: 6px; font-size: 14px; background: #fff; color: var(--text);
+/* === UNIFORM FORM BOX ALIGNMENT === */
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 12px;
+  align-items: end;
 }
+.grid-2 > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-width: 0;
+}
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+  line-height: 1.3;
+}
+input:not([type="checkbox"]):not([type="radio"]), select {
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--text);
+}
+textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--text);
+}
+.grid-2 .btn-sm { height: 40px; padding: 0 12px; white-space: nowrap; }
 
 .btn {
   padding: 9px 14px; border: none; border-radius: 6px; font-size: 13px;
@@ -77,7 +111,7 @@ input, select, textarea {
 .btn-light { background: #e5e7eb; color: var(--text); }
 .btn-sm { padding: 5px 10px; font-size: 12px; }
 
-/* Hero Stock Card on Dashboard */
+/* Hero Stock Card */
 .hero-stock {
   background: linear-gradient(135deg, #0b0d12, #1f2937);
   color: #fff; border-radius: 12px; padding: 18px 20px;
@@ -87,7 +121,7 @@ input, select, textarea {
 .hero-stock:hover, .hero-stock:focus { border-color: #60a5fa; }
 .hero-stock .big-num { font-size: 34px; font-weight: 800; }
 
-/* Tally Gateway & Selectable List Rows */
+/* Tally Gateway & List Rows */
 .list-menu { display: flex; flex-direction: column; gap: 6px; }
 .list-row {
   display: flex; align-items: center; justify-content: space-between;
@@ -103,11 +137,21 @@ input, select, textarea {
 }
 .list-row.kbd-active .badge { background: var(--primary); color: #fff; }
 
-/* Batch Table */
+/* Universal Search & 15-Row Pagination Bar */
+.search-bar-wrap {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;
+}
+.search-bar-wrap input { flex: 1; min-width: 200px; }
+.pager-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid #e5e7eb; font-size: 13px;
+}
+.pager-bar .pager-btns { display: flex; gap: 6px; align-items: center; }
+
+/* Table */
 table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
 th, td { border: 1px solid var(--border); padding: 7px 8px; text-align: left; }
 th { background: #f3f4f6; font-weight: 700; }
-.batch-input { padding: 6px 8px; font-size: 13px; border-radius: 4px; }
 
 /* Overlays */
 .overlay {
