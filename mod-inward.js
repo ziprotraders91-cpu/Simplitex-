@@ -1,8 +1,8 @@
-// === SimpliTex Module 1 (Job Work Batch + A5 Bill Print + Passbook) & Module 2 (Stock Inward) ===
+// === SimpliTex Module 1 & 2 (Universal Search + 15-Row Pagination + Aligned Boxes + A5 Bill) ===
 
 const _JW_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
 let jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null };
-let inState = { step: 'MENU', jwType: '', worker: null, filterDate: '' };
+let inState = { step: 'MENU', jwType: '', worker: null };
 
 function esc(str) {
   return String(str || '').replace(/[&<>"']/g, (m) => ({
@@ -32,6 +32,10 @@ function rememberWorkDetail(txt) {
     list.unshift(txt);
     localStorage.setItem('simplitex_jw_work_details', JSON.stringify(list.slice(0, 100)));
   }
+}
+
+function resetPager(id) {
+  if (window._stxPagerState) delete window._stxPagerState[id];
 }
 
 function ensureJWPrintSetup(pageCss) {
@@ -65,9 +69,10 @@ function ensureJWPrintSetup(pageCss) {
 window.onTabChanged = function (tabId) {
   if (tabId === 'tab-jobwork') {
     jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null };
+    resetPager('jwTypePager');
     renderJWOutward();
   } else if (tabId === 'tab-inward') {
-    inState = { step: 'MENU', jwType: '', worker: null, filterDate: '' };
+    inState = { step: 'MENU', jwType: '', worker: null };
     renderStockInward();
   }
 };
@@ -102,6 +107,7 @@ async function renderJWOutward() {
   await openDB();
   const box = document.getElementById('tab-jobwork');
 
+  // STEP 1: JOB WORK TYPES (Search + 15-Row Pager)
   if (jwState.step === 'TYPE') {
     const types = await dbGetAll('jobWorkTypes');
     box.innerHTML = `
@@ -110,19 +116,27 @@ async function renderJWOutward() {
           <h2>1. Job Work Outward — Kaam Chunein</h2>
           <button class="btn btn-dark btn-sm" onclick="addJobWorkTypePrompt('out')">+ Naya Job Work</button>
         </div>
-        <div class="list-menu kbd-list">
-          ${types.map((t, i) => `
-            <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}" onclick="pickOutJWType('${esc(t.name)}')">
-              <span>${i + 1}. ${esc(t.name)}</span>
-              <span class="badge">Enter →</span>
-            </div>
-          `).join('')}
-        </div>
+        <div id="jwTypePager"></div>
       </div>
     `;
+    mountPagedList({
+      id: 'jwTypePager',
+      mode: 'list',
+      items: types,
+      perPage: 15,
+      placeholder: '🔍 Job Work search karein (Calender, Swarovski...)...',
+      getSearchText: (t) => t.name,
+      renderRow: (t, gIdx, pageIdx) => `
+        <div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickOutJWType('${esc(t.name)}')">
+          <span>${gIdx + 1}. ${esc(t.name)}</span>
+          <span class="badge">Enter →</span>
+        </div>
+      `
+    });
     return;
   }
 
+  // STEP 2: WORKERS LIST (Search + 15-Row Pager)
   if (jwState.step === 'WORKER') {
     const allWorkers = await dbGetAll('jobWorkers');
     const workers = allWorkers.filter((w) => !w.jobWorkType || w.jobWorkType.toUpperCase() === jwState.jwType.toUpperCase());
@@ -144,35 +158,45 @@ async function renderJWOutward() {
             <div><label>Mobile No.</label><input id="newWPhoneOut" type="tel" placeholder="9198xxxxxx" /></div>
             <div><label>Address</label><input id="newWAddrOut" placeholder="e.g. A.13/199, Ghasiaritol Varanasi" /></div>
             <div><label>City / Destination</label><input id="newWCityOut" placeholder="e.g. VARANASI" /></div>
+            <div><label>Default Transport</label><input id="newWTransOut" placeholder="e.g. Kashi Express" /></div>
+            <div><button class="btn btn-dark" style="height:40px;" onclick="saveNewWorker('out')">Save Worker</button></div>
           </div>
-          <div style="margin-top:8px;"><label>Default Transport (Dispatched through)</label><input id="newWTransOut" placeholder="e.g. Kashi Express" /></div>
-          <button class="btn btn-dark btn-sm" style="margin-top:8px;" onclick="saveNewWorker('out')">Save Worker</button>
         </div>
 
-        <div class="list-menu kbd-list">
-          ${workers.length ? workers.map((w, i) => {
-            const p = pendList.find((x) => x.id === `${w.name}__${jwState.jwType.toUpperCase()}`);
-            const pQty = p ? p.qty : 0;
-            return `
-              <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}" onclick="pickOutWorker(${w.id})">
-                <div>
-                  <div>${i + 1}. ${esc(w.name)}</div>
-                  <small style="color:#6b7280; font-weight:400;">${esc(w.phone || '')} ${esc(w.city || w.address || '')}</small>
-                </div>
-                <div style="display:flex; align-items:center; gap:6px;">
-                  <span class="badge" style="color:${pQty > 0 ? '#b91c1c' : '#15803d'};">Pending: ${pQty}</span>
-                  <button type="button" class="btn btn-light btn-sm"
-                          onclick="event.stopPropagation(); openWorkerPassbook(${w.id})">📜 Khata</button>
-                </div>
-              </div>
-            `;
-          }).join('') : '<p style="color:#6b7280; font-size:13px;">Abhi koi worker nahi hai. Upar "+ Naya Worker" dabaa kar jodein.</p>'}
-        </div>
+        <div id="jwWorkerPager"></div>
       </div>
     `;
+
+    mountPagedList({
+      id: 'jwWorkerPager',
+      mode: 'list',
+      items: workers,
+      perPage: 15,
+      placeholder: '🔍 Worker naam, mobile ya city search karein...',
+      getSearchText: (w) => `${w.name} ${w.phone || ''} ${w.city || ''} ${w.address || ''}`,
+      renderRow: (w, gIdx, pageIdx) => {
+        const p = pendList.find((x) => x.id === `${w.name}__${jwState.jwType.toUpperCase()}`);
+        const pQty = p ? p.qty : 0;
+        return `
+          <div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickOutWorker(${w.id})">
+            <div>
+              <div>${gIdx + 1}. ${esc(w.name)}</div>
+              <small style="color:#6b7280; font-weight:400;">${esc(w.phone || '')} ${esc(w.city || w.address || '')}</small>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span class="badge" style="color:${pQty > 0 ? '#b91c1c' : '#15803d'};">Pending: ${pQty}</span>
+              <button type="button" class="btn btn-light btn-sm"
+                      onclick="event.stopPropagation(); openWorkerPassbook(${w.id})">📜 Khata</button>
+            </div>
+          </div>
+        `;
+      },
+      emptyHtml: '<p style="color:#6b7280; font-size:13px;">Koi worker nahi mila. Upar "+ Naya Worker" dabaa kar jodein.</p>'
+    });
     return;
   }
 
+  // STEP 2B: WORKER PASSBOOK (Search + 15-Row Pager)
   if (jwState.step === 'PASSBOOK') {
     const jwUpper = jwState.jwType.toUpperCase();
     const wName = jwState.worker.name.toUpperCase();
@@ -193,40 +217,45 @@ async function renderJWOutward() {
           <b style="font-size:18px; color:#b91c1c;">${pend ? pend.qty : 0} Pcs</b>
         </div>
 
-        <div style="overflow-x:auto;">
-          <table>
-            <thead>
-              <tr><th>Date / No.</th><th>Kaam</th><th>Batch / Detail</th><th>Pcs</th><th>Kya Kaam Hoga</th><th>Action</th></tr>
-            </thead>
-            <tbody>
-              ${ledger.map((l) => {
-                const isOut = l.direction === 'OUT';
-                const detail = isOut && Array.isArray(l.batchItems)
-                  ? l.batchItems.map((b) => `${b.bunkarName === _JW_POOL ? 'POOL' : b.bunkarName} (${b.qty})`).join(', ')
-                  : 'Total Wapsi Entry';
-                return `
-                  <tr>
-                    <td style="white-space:nowrap;">${esc(l.date)}${l.jobWorkNo ? `<br/><small>#${esc(l.jobWorkNo)}</small>` : ''}</td>
-                    <td><b style="color:${isOut ? '#1d4ed8' : '#15803d'};">${isOut ? '📤 Bheja (OUT)' : '📥 Wapas (IN)'}</b></td>
-                    <td><small>${esc(detail)}</small></td>
-                    <td><b>${isOut ? '+' : '-'}${l.qty}</b></td>
-                    <td><small><b>${esc(l.note || '-')}</b></small></td>
-                    <td style="white-space:nowrap;">
-                      ${isOut ? `<button class="btn btn-dark btn-sm" onclick="printJobWorkBill(${l.id})">🖨️ A5 Bill</button>` : ''}
-                      <button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${l.id}, 'PASSBOOK')">↩️ Del</button>
-                    </td>
-                  </tr>
-                `;
-              }).join('') || '<tr><td colspan="6">Is worker ka abhi koi record nahi hai</td></tr>'}
-            </tbody>
-          </table>
-        </div>
+        <div id="jwPassbookPager"></div>
       </div>
     `;
+
+    mountPagedList({
+      id: 'jwPassbookPager',
+      items: ledger,
+      perPage: 15,
+      placeholder: '🔍 Date, Bunkar, Bill No. ya Kaam search karein...',
+      headHtml: '<tr><th>Date / No.</th><th>Kaam</th><th>Batch / Detail</th><th>Pcs</th><th>Kya Kaam Hoga</th><th>Action</th></tr>',
+      getSearchText: (l) => {
+        const bTxt = Array.isArray(l.batchItems) ? l.batchItems.map((b) => b.bunkarName).join(' ') : '';
+        return `${l.date} ${l.jobWorkNo || ''} ${l.direction} ${bTxt} ${l.note || ''}`;
+      },
+      renderRow: (l) => {
+        const isOut = l.direction === 'OUT';
+        const detail = isOut && Array.isArray(l.batchItems)
+          ? l.batchItems.map((b) => `${b.bunkarName === _JW_POOL ? 'POOL' : b.bunkarName} (${b.qty})`).join(', ')
+          : 'Total Wapsi Entry';
+        return `
+          <tr>
+            <td style="white-space:nowrap;">${esc(l.date)}${l.jobWorkNo ? `<br/><small>#${esc(l.jobWorkNo)}</small>` : ''}</td>
+            <td><b style="color:${isOut ? '#1d4ed8' : '#15803d'};">${isOut ? '📤 Bheja (OUT)' : '📥 Wapas (IN)'}</b></td>
+            <td><small>${esc(detail)}</small></td>
+            <td><b>${isOut ? '+' : '-'}${l.qty}</b></td>
+            <td><small><b>${esc(l.note || '-')}</b></small></td>
+            <td style="white-space:nowrap;">
+              ${isOut ? `<button class="btn btn-dark btn-sm" onclick="printJobWorkBill(${l.id})">🖨️ A5 Bill</button>` : ''}
+              <button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${l.id}, 'PASSBOOK')">↩️ Del</button>
+            </td>
+          </tr>
+        `;
+      },
+      emptyHtml: '<tr><td colspan="6">Is worker ka abhi koi record nahi hai</td></tr>'
+    });
     return;
   }
 
-  // STEP 3: BATCH FORM
+  // STEP 3: BATCH FORM (Sabhi Boxes Ekdum Seedh Me)
   if (jwState.step === 'BATCH') {
     const stocks = (await dbGetAll('bunkarStock')).filter((s) => s.qty > 0);
     const firms = await dbGetAll('firms');
@@ -262,28 +291,23 @@ async function renderJWOutward() {
               ${firms.length ? firms.map((f) => `<option value="${f.id}" ${Number(m.firmId) === f.id ? 'selected' : ''}>${esc(f.name)} (${esc(f.shortCode)})</option>`).join('') : '<option value="">Settings me Firm add karein</option>'}
             </select>
           </div>
-          <div class="grid-2">
-            <div><label>Job Work No. *</label><input type="number" id="batchBillNo" value="${esc(m.jobWorkNo)}" onchange="syncBatchMeta()" /></div>
-            <div><label>Dated *</label><input type="date" id="batchDate" value="${esc(m.date)}" onchange="syncBatchMeta()" /></div>
-          </div>
+          <div><label>Job Work No. *</label><input type="number" id="batchBillNo" value="${esc(m.jobWorkNo)}" onchange="syncBatchMeta()" /></div>
+          <div><label>Dated *</label><input type="date" id="batchDate" value="${esc(m.date)}" onchange="syncBatchMeta()" /></div>
           <div><label>Dispatched through (Transport)</label><input id="batchTransport" value="${esc(m.transport)}" placeholder="e.g. Kashi Express" onchange="syncBatchMeta()" /></div>
           <div><label>Destination (City)</label><input id="batchDestination" value="${esc(m.destination)}" placeholder="e.g. VARANASI" onchange="syncBatchMeta()" /></div>
+          <div>
+            <label>✨ Kya Kaam / Design Hoga? * (Bill Bold Line)</label>
+            <input id="batchNote" list="jwWorkDetailList" value="${esc(m.note)}"
+                   placeholder="e.g. GAWATI ZARI CONTRAST ANCHAL" oninput="syncBatchMeta()" />
+            <datalist id="jwWorkDetailList">
+              ${savedWorks.map((w) => `<option value="${esc(w)}">`).join('')}
+            </datalist>
+          </div>
         </div>
 
-        <!-- PROMINENT JOB WORK / SWAROVSKI DESIGN WORK FIELD -->
-        <div style="background:#fefce8; border:1px solid #fde047; padding:10px; border-radius:8px; margin-bottom:10px;">
-          <label style="color:#854d0e; font-size:13px;">✨ Kya Kaam / Design Hoga? * (Bill ke neeche Bold print hoga)</label>
-          <input id="batchNote" list="jwWorkDetailList" value="${esc(m.note)}"
-                 placeholder="e.g. GAWATI ZARI CONTRAST ANCHAL" oninput="syncBatchMeta()" />
-          <datalist id="jwWorkDetailList">
-            ${savedWorks.map((w) => `<option value="${esc(w)}">`).join('')}
-          </datalist>
-        </div>
-
-        <!-- Keyboard Fast Batch Entry -->
         <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:10px; border-radius:8px; margin-bottom:10px;">
           <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:6px;">
-            Batch Me Bunkar Saree Jodein (Bunkar chunein → Qty likh kar Enter dabayein):
+            Batch Me Bunkar Saree Jodein (Bunkar → Qty likh kar Enter dabayein | Khali box me Backspace se Piche):
           </div>
           <div class="grid-2">
             <div>
@@ -338,7 +362,7 @@ function syncBatchMeta() {
   jwState.meta.note = document.getElementById('batchNote')?.value.trim().toUpperCase() || '';
 }
 
-function pickOutJWType(name) { jwState.jwType = name; jwState.step = 'WORKER'; renderJWOutward(); }
+function pickOutJWType(name) { jwState.jwType = name; jwState.step = 'WORKER'; resetPager('jwWorkerPager'); renderJWOutward(); }
 async function pickOutWorker(id) {
   jwState.worker = await dbGet('jobWorkers', id);
   jwState.batchRows = [];
@@ -349,6 +373,7 @@ async function pickOutWorker(id) {
 async function openWorkerPassbook(id) {
   jwState.worker = await dbGet('jobWorkers', id);
   jwState.step = 'PASSBOOK';
+  resetPager('jwPassbookPager');
   renderJWOutward();
 }
 
@@ -564,7 +589,7 @@ async function printJobWorkBill(ledgerId) {
 }
 
 // ==========================================
-// MODULE 2: STOCK INWARD + FULL INWARD RECORD
+// MODULE 2: STOCK INWARD + UNIVERSAL SEARCH & 15-ROW PAGER
 // ==========================================
 async function renderStockInward() {
   await openDB();
@@ -576,7 +601,7 @@ async function renderStockInward() {
       <div class="card">
         <div class="card-head">
           <h2>2. Stock Inward — Maal Kahan se Aaya?</h2>
-          <button class="btn btn-dark btn-sm" onclick="inState.step='HISTORY'; renderStockInward();">
+          <button class="btn btn-dark btn-sm" onclick="inState.step='HISTORY'; resetPager('inwardHistPager'); renderStockInward();">
             📜 Poora Record (${ledger.length})
           </button>
         </div>
@@ -585,7 +610,7 @@ async function renderStockInward() {
             <span>1. Direct Baithak se Aayi (Bunkar ke Naam se)</span>
             <span class="badge">Key: 1</span>
           </div>
-          <div class="list-row" data-key="2" onclick="inState.step='JW_TYPE'; renderStockInward();">
+          <div class="list-row" data-key="2" onclick="inState.step='JW_TYPE'; resetPager('inJWTypePager'); renderStockInward();">
             <span>2. Job Work se Wapas Aayi (Total Pcs Entry)</span>
             <span class="badge">Key: 2</span>
           </div>
@@ -599,46 +624,39 @@ async function renderStockInward() {
     const allIn = (await dbGetAll('jobWorkLedger'))
       .filter((l) => l.direction === 'IN')
       .sort((a, b) => b.createdAt - a.createdAt);
-    const filtered = inState.filterDate ? allIn.filter((l) => l.date === inState.filterDate) : allIn;
 
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>📜 Stock Inward Record (${filtered.length})</h2>
+          <h2>📜 Stock Inward Record (${allIn.length})</h2>
           <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
         </div>
-
-        <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
-          <label style="margin:0;">Date Filter:</label>
-          <input type="date" style="width:auto;" value="${esc(inState.filterDate)}"
-                 onchange="inState.filterDate=this.value; renderStockInward();" />
-          ${inState.filterDate ? `<button class="btn btn-light btn-sm" onclick="inState.filterDate=''; renderStockInward();">All Dates</button>` : ''}
-        </div>
-
-        <div style="overflow-x:auto;">
-          <table>
-            <thead>
-              <tr><th>Date</th><th>Source</th><th>Bunkar / Worker</th><th>Pcs</th><th>Note</th><th>Galti Sudhar</th></tr>
-            </thead>
-            <tbody>
-              ${filtered.map((l) => {
-                const isDirect = l.jobWorkType === 'DIRECT_BAITHAK';
-                return `
-                  <tr>
-                    <td style="white-space:nowrap;">${esc(l.date)}</td>
-                    <td><b>${isDirect ? '🏠 Direct Baithak' : '🧵 ' + esc(l.jobWorkType)}</b></td>
-                    <td><b>${esc(isDirect ? l.bunkarName : l.workerName)}</b></td>
-                    <td><b style="color:#15803d;">+${l.qty}</b></td>
-                    <td><small>${esc(l.note || '-')}</small></td>
-                    <td><button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${l.id}, 'INWARD_HIST')">↩️ Delete</button></td>
-                  </tr>
-                `;
-              }).join('') || '<tr><td colspan="6">Koi record nahi mila</td></tr>'}
-            </tbody>
-          </table>
-        </div>
+        <div id="inwardHistPager"></div>
       </div>
     `;
+
+    mountPagedList({
+      id: 'inwardHistPager',
+      items: allIn,
+      perPage: 15,
+      placeholder: '🔍 Date (2026-11), Bunkar, Worker ya Note search karein...',
+      headHtml: '<tr><th>Date</th><th>Source</th><th>Bunkar / Worker</th><th>Pcs</th><th>Note</th><th>Galti Sudhar</th></tr>',
+      getSearchText: (l) => `${l.date} ${l.jobWorkType} ${l.bunkarName || ''} ${l.workerName || ''} ${l.note || ''}`,
+      renderRow: (l) => {
+        const isDirect = l.jobWorkType === 'DIRECT_BAITHAK';
+        return `
+          <tr>
+            <td style="white-space:nowrap;">${esc(l.date)}</td>
+            <td><b>${isDirect ? '🏠 Direct Baithak' : '🧵 ' + esc(l.jobWorkType)}</b></td>
+            <td><b>${esc(isDirect ? l.bunkarName : l.workerName)}</b></td>
+            <td><b style="color:#15803d;">+${l.qty}</b></td>
+            <td><small>${esc(l.note || '-')}</small></td>
+            <td><button class="btn btn-danger btn-sm" onclick="reverseLedgerEntry(${l.id}, 'INWARD_HIST')">↩️ Delete</button></td>
+          </tr>
+        `;
+      },
+      emptyHtml: '<tr><td colspan="6">Koi record nahi mila</td></tr>'
+    });
     return;
   }
 
@@ -682,17 +700,24 @@ async function renderStockInward() {
           <h2>Job Work Wapsi — Kaam Chunein</h2>
           <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
         </div>
-        <div class="list-menu kbd-list">
-          ${types.map((t, i) => `
-            <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}"
-                 onclick="inState.jwType='${esc(t.name)}'; inState.step='JW_WORKER'; renderStockInward();">
-              <span>${i + 1}. ${esc(t.name)}</span>
-              <span class="badge">Enter →</span>
-            </div>
-          `).join('')}
-        </div>
+        <div id="inJWTypePager"></div>
       </div>
     `;
+    mountPagedList({
+      id: 'inJWTypePager',
+      mode: 'list',
+      items: types,
+      perPage: 15,
+      placeholder: '🔍 Job Work search karein...',
+      getSearchText: (t) => t.name,
+      renderRow: (t, gIdx, pageIdx) => `
+        <div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}"
+             onclick="inState.jwType='${esc(t.name)}'; inState.step='JW_WORKER'; resetPager('inWorkerPager'); renderStockInward();">
+          <span>${gIdx + 1}. ${esc(t.name)}</span>
+          <span class="badge">Enter →</span>
+        </div>
+      `
+    });
     return;
   }
 
@@ -714,24 +739,33 @@ async function renderStockInward() {
           <div class="grid-2">
             <div><label>Worker Naam *</label><input id="newWNameIn" placeholder="e.g. G.K. Fabrics" /></div>
             <div><label>Mobile No.</label><input id="newWPhoneIn" type="tel" /></div>
+            <div><label>Address</label><input id="newWAddrIn" /></div>
+            <div><button class="btn btn-dark" style="height:40px;" onclick="saveNewWorker('in')">Save Worker</button></div>
           </div>
-          <div style="margin-top:8px;"><label>Address</label><input id="newWAddrIn" /></div>
-          <button class="btn btn-dark btn-sm" style="margin-top:8px;" onclick="saveNewWorker('in')">Save Worker</button>
         </div>
-        <div class="list-menu kbd-list">
-          ${workers.length ? workers.map((w, i) => {
-            const p = pendList.find((x) => x.id === `${w.name}__${inState.jwType.toUpperCase()}`);
-            const pQty = p ? p.qty : 0;
-            return `
-              <div class="list-row ${i === 0 ? 'kbd-active' : ''}" data-key="${i + 1}" onclick="pickInWorker(${w.id})">
-                <span>${i + 1}. ${esc(w.name)}</span>
-                <span class="badge" style="color:${pQty > 0 ? '#b91c1c' : '#15803d'};">Pending: ${pQty} Pcs</span>
-              </div>
-            `;
-          }).join('') : '<p style="color:#6b7280; font-size:13px;">Koi worker nahi mila.</p>'}
-        </div>
+        <div id="inWorkerPager"></div>
       </div>
     `;
+
+    mountPagedList({
+      id: 'inWorkerPager',
+      mode: 'list',
+      items: workers,
+      perPage: 15,
+      placeholder: '🔍 Worker search karein...',
+      getSearchText: (w) => `${w.name} ${w.phone || ''} ${w.city || ''}`,
+      renderRow: (w, gIdx, pageIdx) => {
+        const p = pendList.find((x) => x.id === `${w.name}__${inState.jwType.toUpperCase()}`);
+        const pQty = p ? p.qty : 0;
+        return `
+          <div class="list-row ${pageIdx === 0 ? 'kbd-active' : ''}" data-key="${pageIdx + 1}" onclick="pickInWorker(${w.id})">
+            <span>${gIdx + 1}. ${esc(w.name)}</span>
+            <span class="badge" style="color:${pQty > 0 ? '#b91c1c' : '#15803d'};">Pending: ${pQty} Pcs</span>
+          </div>
+        `;
+      },
+      emptyHtml: '<p style="color:#6b7280; font-size:13px;">Koi worker nahi mila.</p>'
+    });
     return;
   }
 
@@ -755,11 +789,11 @@ async function renderStockInward() {
             <label>Total Kitni Saree Wapas Aayi (Pcs) *</label>
             <input type="number" id="jwRetQty" min="1" value="${pendQty > 0 ? pendQty : ''}" placeholder="e.g. 93" />
           </div>
-        </div>
-        <div style="margin-top:10px;">
-          <label>Note (Optional)</label>
-          <input id="jwRetNote" placeholder="e.g. Ok checked" data-custom-enter="1"
-                 onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveJWReturnInward(); }" />
+          <div style="grid-column: 1 / -1;">
+            <label>Note (Optional)</label>
+            <input id="jwRetNote" placeholder="e.g. Ok checked" data-custom-enter="1"
+                   onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveJWReturnInward(); }" />
+          </div>
         </div>
         <button class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveJWReturnInward()">
           ✅ Wapsi Save Karein (Pending - / Stock +)
@@ -830,7 +864,7 @@ async function saveJWReturnInward() {
     });
 
     alert(`✅ ${workerName} se ${qty} Pcs wapas aa gayi! (Baki Pending: ${Math.max(0, pendQty - qty)} Pcs)`);
-    inState = { step: 'MENU', jwType: '', worker: null, filterDate: '' };
+    inState = { step: 'MENU', jwType: '', worker: null };
     if (typeof refreshDashboard === 'function') await refreshDashboard();
     renderStockInward();
   } catch (err) { alert('Save Error: ' + err.message); }
