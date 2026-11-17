@@ -1,4 +1,4 @@
-// === SimpliTex Module 1 & 2 (Universal Search + 15-Row Pagination + Aligned Boxes + A5 Bill) ===
+// === SimpliTex Module 1 & 2 v2 (Indexed Queries + Universal Search + 15-Row Pager + A5 Bill) ===
 
 const _JW_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
 let jwState = { step: 'TYPE', jwType: '', worker: null, batchRows: [], meta: null };
@@ -36,6 +36,49 @@ function rememberWorkDetail(txt) {
 
 function resetPager(id) {
   if (window._stxPagerState) delete window._stxPagerState[id];
+}
+
+async function getNextJobWorkNoFast() {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('jobWorkLedger', 'readonly');
+    const store = tx.objectStore('jobWorkLedger');
+    let maxNo = 0;
+    let outFound = 0;
+    const req = store.openCursor(null, 'prev');
+    req.onsuccess = (e) => {
+      const cur = e.target.result;
+      if (!cur || outFound >= 20) {
+        resolve(maxNo + 1);
+        return;
+      }
+      const v = cur.value;
+      if (v && v.direction === 'OUT') {
+        outFound++;
+        const n = Number(v.jobWorkNo) || 0;
+        if (n > maxNo) maxNo = n;
+      }
+      cur.continue();
+    };
+    req.onerror = () => resolve(1);
+  });
+}
+
+async function countInwardLedgerFast() {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('jobWorkLedger', 'readonly');
+    const store = tx.objectStore('jobWorkLedger');
+    if (store.indexNames.contains('direction')) {
+      const req = store.index('direction').count('IN');
+      req.onsuccess = () => resolve(req.result || 0);
+      req.onerror = () => resolve(0);
+    } else {
+      const req = store.getAll();
+      req.onsuccess = () => resolve((req.result || []).filter((l) => l.direction === 'IN').length);
+      req.onerror = () => resolve(0);
+    }
+  });
 }
 
 function ensureJWPrintSetup(pageCss) {
@@ -196,12 +239,15 @@ async function renderJWOutward() {
     return;
   }
 
-  // STEP 2B: WORKER PASSBOOK (Search + 15-Row Pager)
+  // STEP 2B: WORKER PASSBOOK (Indexed Query + 15-Row Pager)
   if (jwState.step === 'PASSBOOK') {
     const jwUpper = jwState.jwType.toUpperCase();
     const wName = jwState.worker.name.toUpperCase();
-    const ledger = (await dbGetAll('jobWorkLedger'))
-      .filter((l) => l.workerName === wName && l.jobWorkType === jwUpper)
+    const rawWorkerLedger = (typeof dbGetByIndex === 'function')
+      ? await dbGetByIndex('jobWorkLedger', 'workerName', wName)
+      : (await dbGetAll('jobWorkLedger')).filter((l) => l.workerName === wName);
+    const ledger = rawWorkerLedger
+      .filter((l) => l.jobWorkType === jwUpper)
       .sort((a, b) => b.createdAt - a.createdAt);
     const pend = await dbGet('jobWorkPending', `${wName}__${jwUpper}`);
 
@@ -259,14 +305,13 @@ async function renderJWOutward() {
   if (jwState.step === 'BATCH') {
     const stocks = (await dbGetAll('bunkarStock')).filter((s) => s.qty > 0);
     const firms = await dbGetAll('firms');
-    const allLedger = await dbGetAll('jobWorkLedger');
-    const maxNo = allLedger.reduce((m, x) => Math.max(m, Number(x.jobWorkNo) || 0), 0);
     const savedWorks = getSavedWorkDetails();
 
     if (!jwState.meta) {
+      const nextJWNo = await getNextJobWorkNoFast();
       jwState.meta = {
         firmId: firms.length ? firms[0].id : '',
-        jobWorkNo: maxNo + 1,
+        jobWorkNo: nextJWNo,
         date: todayISO(),
         transport: jwState.worker.transport || '',
         destination: jwState.worker.city || '',
@@ -596,13 +641,13 @@ async function renderStockInward() {
   const box = document.getElementById('tab-inward');
 
   if (inState.step === 'MENU') {
-    const ledger = (await dbGetAll('jobWorkLedger')).filter((l) => l.direction === 'IN');
+    const inCount = await countInwardLedgerFast();
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
           <h2>2. Stock Inward — Maal Kahan se Aaya?</h2>
           <button class="btn btn-dark btn-sm" onclick="inState.step='HISTORY'; resetPager('inwardHistPager'); renderStockInward();">
-            📜 Poora Record (${ledger.length})
+            📜 Poora Record (${inCount})
           </button>
         </div>
         <div class="list-menu kbd-list">
@@ -621,9 +666,10 @@ async function renderStockInward() {
   }
 
   if (inState.step === 'HISTORY') {
-    const allIn = (await dbGetAll('jobWorkLedger'))
-      .filter((l) => l.direction === 'IN')
-      .sort((a, b) => b.createdAt - a.createdAt);
+    const allInRaw = (typeof dbGetByIndex === 'function')
+      ? await dbGetByIndex('jobWorkLedger', 'direction', 'IN')
+      : (await dbGetAll('jobWorkLedger')).filter((l) => l.direction === 'IN');
+    const allIn = allInRaw.sort((a, b) => b.createdAt - a.createdAt);
 
     box.innerHTML = `
       <div class="card">
