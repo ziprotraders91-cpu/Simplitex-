@@ -1,9 +1,8 @@
-// === SimpliTex Database Engine v3 (IndexedDB + Indexes + Exact Auto Stock Engine) ===
+// === SimpliTex Database Engine v4 (DB v3: convertedStock + 4-Stage Exact Auto Stock Engine) ===
 const DB_NAME = 'SimpliTexDB';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 let dbInstance = null;
 
-// Browser se storage permanent rakhne ki request
 if (navigator.storage && navigator.storage.persist) {
   navigator.storage.persist().catch(() => {});
 }
@@ -22,6 +21,7 @@ function openDB() {
         { name: 'jobWorkTypes', keyPath: 'name' },
         { name: 'jobWorkers', keyPath: 'id', autoIncrement: true },
         { name: 'bunkarStock', keyPath: 'bunkarName' },
+        { name: 'convertedStock', keyPath: 'designName' },
         { name: 'jobWorkPending', keyPath: 'id' },
         {
           name: 'jobWorkLedger',
@@ -203,7 +203,7 @@ async function dbDelete(storeName, key) {
   });
 }
 
-// === EXACT AUTO STOCK ENGINE: Ledger + Barcoding + Challans se 100% Sahi Stock Rebuild ===
+// === 4-STAGE EXACT AUTO STOCK ENGINE ===
 async function stxRecalculateAllStock() {
   const db = await openDB();
   let opening = null;
@@ -212,7 +212,7 @@ async function stxRecalculateAllStock() {
   } catch (_) {}
 
   return new Promise((resolve, reject) => {
-    const storeNames = ['bunkarStock', 'jobWorkPending', 'readyStock', 'jobWorkLedger', 'barcodingLogs', 'challans'];
+    const storeNames = ['bunkarStock', 'convertedStock', 'jobWorkPending', 'readyStock', 'jobWorkLedger', 'barcodingLogs', 'challans'];
     const tx = db.transaction(storeNames, 'readwrite');
 
     let jwLedger = null;
@@ -225,13 +225,17 @@ async function stxRecalculateAllStock() {
       if (doneCount < 3) return;
 
       const bunkarMap = {};
+      const convertedMap = {};
       const pendingMap = {};
       const readyMap = {};
 
-      // 1. Year Closing Opening Stock (agar kabhi Year Closing hua ho)
+      // 1. Year Closing Opening Stock
       if (opening) {
         (opening.bunkarStock || []).forEach((b) => {
           if (b && b.bunkarName) bunkarMap[b.bunkarName] = (bunkarMap[b.bunkarName] || 0) + (Number(b.qty) || 0);
+        });
+        (opening.convertedStock || []).forEach((c) => {
+          if (c && c.designName) convertedMap[c.designName] = { designName: c.designName, specLine: c.specLine || '', qty: Number(c.qty) || 0 };
         });
         (opening.jobWorkPending || []).forEach((p) => {
           if (p && p.id) pendingMap[p.id] = { id: p.id, workerName: p.workerName, jobWorkType: p.jobWorkType, qty: Number(p.qty) || 0 };
@@ -267,26 +271,51 @@ async function stxRecalculateAllStock() {
         }
       });
 
-      // 3. Replay Barcoding & Stock Convert Logs
+      // 3. Replay Stock Convert & Manual Barcoding Logs
       bcLogs.forEach((b) => {
         const qty = Number(b.qty) || 0;
-        if (b.sourceName) {
-          bunkarMap[b.sourceName] = (bunkarMap[b.sourceName] || 0) - qty;
+        if (b.mode === 'STOCK_CONVERT') {
+          // Stage 2: Bunkar Stock -> Dukan Converted Stock
+          if (b.sourceName) {
+            bunkarMap[b.sourceName] = (bunkarMap[b.sourceName] || 0) - qty;
+          }
+          if (b.designName) {
+            if (!convertedMap[b.designName]) {
+              convertedMap[b.designName] = { designName: b.designName, specLine: b.specLine || '', qty: 0 };
+            } else if (b.specLine) {
+              convertedMap[b.designName].specLine = b.specLine;
+            }
+            convertedMap[b.designName].qty += qty;
+          }
+        } else {
+          // Stage 3: Manual Barcoding (Converted Stock -> Challan Ready Stock)
+          if (b.fromConverted) {
+            if (b.sourceName) {
+              if (!convertedMap[b.sourceName]) {
+                convertedMap[b.sourceName] = { designName: b.sourceName, specLine: b.specLine || '', qty: 0 };
+              }
+              convertedMap[b.sourceName].qty -= qty;
+            }
+          } else if (b.sourceName) {
+            // Purane legacy entries ka backward compatibility
+            bunkarMap[b.sourceName] = (bunkarMap[b.sourceName] || 0) - qty;
+          }
+
+          const skuKey = `${b.designName}__${b.firmCode}`;
+          if (!readyMap[skuKey]) {
+            readyMap[skuKey] = {
+              skuKey,
+              designName: b.designName,
+              firmCode: b.firmCode,
+              specLine: b.specLine || '',
+              barcodeVal: b.barcodeVal || `${b.designName} ${b.firmCode}`,
+              qty: 0
+            };
+          } else if (b.specLine) {
+            readyMap[skuKey].specLine = b.specLine;
+          }
+          readyMap[skuKey].qty += qty;
         }
-        const skuKey = `${b.designName}__${b.firmCode}`;
-        if (!readyMap[skuKey]) {
-          readyMap[skuKey] = {
-            skuKey,
-            designName: b.designName,
-            firmCode: b.firmCode,
-            specLine: b.specLine || '',
-            barcodeVal: b.barcodeVal || `${b.designName} ${b.firmCode}`,
-            qty: 0
-          };
-        } else if (b.specLine) {
-          readyMap[skuKey].specLine = b.specLine;
-        }
-        readyMap[skuKey].qty += qty;
       });
 
       // 4. Replay Challans
@@ -307,13 +336,20 @@ async function stxRecalculateAllStock() {
         });
       });
 
-      // 5. Save Clean Exact Stock
+      // 5. Write Clean Exact Stock
       const nowIso = new Date().toISOString();
       const bStore = tx.objectStore('bunkarStock');
       bStore.clear();
       Object.keys(bunkarMap).forEach((name) => {
         const q = bunkarMap[name];
         if (q > 0) bStore.put({ bunkarName: name, qty: q, updatedAt: nowIso });
+      });
+
+      const cStore = tx.objectStore('convertedStock');
+      cStore.clear();
+      Object.keys(convertedMap).forEach((dName) => {
+        const item = convertedMap[dName];
+        if (item.qty > 0) cStore.put({ ...item, updatedAt: nowIso });
       });
 
       const pStore = tx.objectStore('jobWorkPending');
