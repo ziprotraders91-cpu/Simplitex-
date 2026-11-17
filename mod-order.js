@@ -1,6 +1,6 @@
-// === SimpliTex Module 3 v2: Order Form (Fast Indexed + O(1) Fulfillment Status) ===
+// === SimpliTex Module 3 v3: Order Form (Edit Order + Aligned Boxes + Fast Fulfillment Status) ===
 
-let orderState = { view: 'FORM', items: [], filter: 'ALL' };
+let orderState = { view: 'FORM', items: [], filter: 'ALL', editId: null, origCreatedAt: null, draft: null };
 
 window.stxComputeOrderStatus = function (order, allChallans) {
   const ordNo = String(order.orderNo);
@@ -91,6 +91,9 @@ window.onTabChanged = function (tabId) {
   if (_prevTabHookOrder) _prevTabHookOrder(tabId);
   if (tabId === 'tab-order') {
     orderState.view = 'FORM';
+    orderState.editId = null;
+    orderState.origCreatedAt = null;
+    orderState.draft = null;
     renderOrderModule();
   }
 };
@@ -99,10 +102,21 @@ const _prevEscHookOrder = window.handleModuleEscape;
 window.handleModuleEscape = function () {
   if (_prevEscHookOrder && _prevEscHookOrder()) return true;
   const sec = document.querySelector('.tab-sec:not(.hidden)');
-  if (sec && sec.id === 'tab-order' && orderState.view === 'LIST') {
-    orderState.view = 'FORM';
-    renderOrderModule();
-    return true;
+  if (sec && sec.id === 'tab-order') {
+    if (orderState.editId) {
+      orderState.editId = null;
+      orderState.origCreatedAt = null;
+      orderState.draft = null;
+      orderState.items = [];
+      orderState.view = 'LIST';
+      renderOrderModule();
+      return true;
+    }
+    if (orderState.view === 'LIST') {
+      orderState.view = 'FORM';
+      renderOrderModule();
+      return true;
+    }
   }
   return false;
 };
@@ -120,13 +134,12 @@ async function renderOrderModule() {
   ensureOrderPrintSetup();
   const box = document.getElementById('tab-order');
 
-  // === SAVED ORDERS LIST (O(1) Grouping + Universal Search + 15-Row Pagination) ===
+  // === SAVED ORDERS LIST ===
   if (orderState.view === 'LIST') {
     const orders = (await dbGetAll('orders')).sort((a, b) => b.id - a.id);
     const allChallans = await dbGetAll('challans');
     const firms = await dbGetAll('firms');
 
-    // Fast O(N) grouping by orderNo
     const challansByOrdNo = {};
     allChallans.forEach((c) => {
       if (!c.orderNo) return;
@@ -158,7 +171,7 @@ async function renderOrderModule() {
         <div class="card-head">
           <h2>📋 Saved Order Forms (${orders.length})</h2>
           <div>
-            <button class="btn btn-dark btn-sm" onclick="orderState.view='FORM'; orderState.items=[]; renderOrderModule();">+ Naya Order</button>
+            <button class="btn btn-dark btn-sm" onclick="orderState.view='FORM'; orderState.items=[]; orderState.editId=null; orderState.draft=null; renderOrderModule();">+ Naya Order</button>
             <button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Back (Esc)</button>
           </div>
         </div>
@@ -213,6 +226,7 @@ async function renderOrderModule() {
             <td>${statusBadge}</td>
             <td style="white-space:nowrap;">
               <button class="btn btn-dark btn-sm" onclick="printOrderById(${o.id})">🖨️ Print</button>
+              <button class="btn btn-light btn-sm" onclick="editOrderById(${o.id})">✏️ Edit</button>
               <button class="btn btn-danger btn-sm" onclick="deleteOrderById(${o.id})">X</button>
             </td>
           </tr>
@@ -223,7 +237,7 @@ async function renderOrderModule() {
     return;
   }
 
-  // === ORDER FORM VIEW (Fast Count + Max Order No) ===
+  // === ORDER FORM VIEW (Create & Edit Mode — Sabhi Boxes Ekdum Seedh Me) ===
   const firms = await dbGetAll('firms');
   const parties = await dbGetAll('parties');
   const folders = await dbGetAll('folders');
@@ -240,42 +254,48 @@ async function renderOrderModule() {
     nextOrderNo = allOrders.length ? Math.max(...allOrders.map((o) => Number(o.orderNo) || 0)) + 1 : 1;
   }
 
+  const d = orderState.draft;
+  const isEdit = !!orderState.editId;
+
   const agentSet = new Set();
   parties.forEach((p) => { if (p.agent) agentSet.add(p.agent.toUpperCase()); });
 
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
-        <h2>3. Order Form (Rate Fix & Order Entry)</h2>
-        <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['ordersListPager']; orderState.filter='ALL'; orderState.view='LIST'; renderOrderModule();">
-          📋 Saved Orders (${totalOrdersCount})
-        </button>
+        <h2>${isEdit ? `✏️ Edit Order Form (#${esc(d.orderNo)})` : '3. Order Form (Rate Fix & Order Entry)'}</h2>
+        <div>
+          ${isEdit ? `<button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Cancel Edit</button>` : ''}
+          <button class="btn btn-light btn-sm" onclick="if(window._stxPagerState) delete window._stxPagerState['ordersListPager']; orderState.filter='ALL'; orderState.view='LIST'; renderOrderModule();">
+            📋 Saved Orders (${totalOrdersCount})
+          </button>
+        </div>
       </div>
 
       ${!firms.length ? `<div style="background:#fef2f2; color:#b91c1c; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px;">
         ⚠️ Pehle <b>⚙️ Settings</b> me apni Firm add karein!
       </div>` : ''}
 
-      <div class="grid-2">
+      <div class="grid-2" style="align-items:start;">
         <div>
           <label>Firm Chunein *</label>
           <select id="ordFirmId">
-            ${firms.map((f) => `<option value="${f.id}">${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
+            ${firms.map((f) => `<option value="${f.id}" ${d && Number(d.firmId) === f.id ? 'selected' : ''}>${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
           </select>
         </div>
-        <div><label>Order No. *</label><input type="number" id="ordNo" value="${nextOrderNo}" /></div>
-        <div><label>Date *</label><input type="date" id="ordDate" value="${todayISO()}" /></div>
+        <div><label>Order No. *</label><input type="number" id="ordNo" value="${d ? esc(d.orderNo) : nextOrderNo}" /></div>
+        <div><label>Date *</label><input type="date" id="ordDate" value="${d ? esc(d.date) : todayISO()}" /></div>
         <div>
           <label>M/s. (Party Name) *</label>
-          <input id="ordPartyName" list="ordPartyList" placeholder="e.g. SHREE SHARDA SAREE" onchange="autoFillPartyInOrder()" />
+          <input id="ordPartyName" list="ordPartyList" value="${d ? esc(d.partyName) : ''}" placeholder="e.g. SHREE SHARDA SAREE" onchange="autoFillPartyInOrder()" />
           <datalist id="ordPartyList">
             ${parties.map((p) => `<option value="${esc(p.name)}">`).join('')}
           </datalist>
         </div>
-        <div><label>City / Address *</label><input id="ordPartyCity" placeholder="e.g. CHIPLOON" /></div>
+        <div><label>City / Address *</label><input id="ordPartyCity" value="${d ? esc(d.partyCity) : ''}" placeholder="e.g. CHIPLOON" /></div>
         <div>
           <label>Agent Name (Broker / Dalal)</label>
-          <input id="ordAgent" list="ordAgentList" placeholder="e.g. RAJESH JI / SELF" />
+          <input id="ordAgent" list="ordAgentList" value="${d ? esc(d.agent) : ''}" placeholder="e.g. RAJESH JI / SELF" />
           <datalist id="ordAgentList">
             ${Array.from(agentSet).map((a) => `<option value="${esc(a)}">`).join('')}
           </datalist>
@@ -287,12 +307,12 @@ async function renderOrderModule() {
         <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:8px;">
           Saree Add Karein (Enter = Aage | Khali Box me Backspace = Piche):
         </div>
-        <div class="grid-2">
+        <div class="grid-2" style="align-items:start;">
           <div>
             <label>Particulars (Saree / Design Name) *</label>
             <input id="ordItemName" list="ordDesignList" placeholder="e.g. RASHMIKA, 6350" />
             <datalist id="ordDesignList">
-              ${designs.map((d) => `<option value="${esc(d.designName)}">`).join('')}
+              ${designs.map((des) => `<option value="${esc(des.designName)}">`).join('')}
             </datalist>
           </div>
           <div><label>Qty *</label><input type="number" id="ordItemQty" min="1" placeholder="32" /></div>
@@ -325,40 +345,63 @@ async function renderOrderModule() {
 
       <!-- Bottom Section (Manual Fold + Aligned) -->
       <div style="background:#f9fafb; border:1px solid #d1d5db; padding:12px; border-radius:8px; margin-top:14px;">
-        <div class="grid-2">
-          <div><label>Marka / Through</label><input id="ordMarka" placeholder="e.g. SSS" /></div>
-          <div><label>Transport</label><input id="ordTransport" placeholder="e.g. VRL" /></div>
+        <div class="grid-2" style="align-items:start;">
+          <div><label>Marka / Through</label><input id="ordMarka" value="${d ? esc(d.marka) : ''}" placeholder="e.g. SSS" /></div>
+          <div><label>Transport</label><input id="ordTransport" value="${d ? esc(d.transport) : ''}" placeholder="e.g. VRL" /></div>
           <div>
             <label>Packing Type *</label>
             <select id="ordPacking">
-              <option value="Box">Box</option>
-              <option value="Paper">Paper</option>
-              <option value="No Box">No Box</option>
+              <option value="Box" ${d && d.packingType === 'Box' ? 'selected' : ''}>Box</option>
+              <option value="Paper" ${d && d.packingType === 'Paper' ? 'selected' : ''}>Paper</option>
+              <option value="No Box" ${d && d.packingType === 'No Box' ? 'selected' : ''}>No Box</option>
             </select>
           </div>
           <div>
             <label>Folder / Fold * (Manual Likhein)</label>
-            <input id="ordFolder" list="ordFolderList" placeholder="e.g. Mishri, Book Fold" />
+            <input id="ordFolder" list="ordFolderList" value="${d ? esc(d.folderName) : ''}" placeholder="e.g. Mishri, Book Fold" />
             <datalist id="ordFolderList">
               ${folders.map((f) => `<option value="${esc(f.name)}">`).join('')}
             </datalist>
           </div>
           <div style="grid-column: 1 / -1;">
             <label>Remarks</label>
-            <input id="ordRemarks" placeholder="Koi special instruction..." data-custom-enter="1"
+            <input id="ordRemarks" value="${d ? esc(d.remarks) : ''}" placeholder="Koi special instruction..." data-custom-enter="1"
                    onkeydown="if(event.key==='Enter'){ event.preventDefault(); saveOrderForm(); }" />
           </div>
         </div>
       </div>
 
       <button type="button" class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveOrderForm()">
-        ✅ Save Order Form (Ctrl+S)
+        ${isEdit ? '✅ Update Order Form (Ctrl+S)' : '✅ Save Order Form (Ctrl+S)'}
       </button>
     </div>
   `;
 
   renderOrderItemsTable();
   setTimeout(() => document.getElementById('ordPartyName')?.focus(), 50);
+}
+
+async function editOrderById(id) {
+  const o = await dbGet('orders', id);
+  if (!o) return;
+  orderState.editId = o.id;
+  orderState.origCreatedAt = o.createdAt || Date.now();
+  orderState.items = (o.items || []).map((it) => ({ ...it }));
+  orderState.draft = {
+    firmId: o.firmId,
+    orderNo: o.orderNo,
+    date: o.date,
+    partyName: o.partyName || '',
+    partyCity: o.partyCity || '',
+    agent: o.agent || '',
+    marka: o.marka || '',
+    transport: o.transport || '',
+    packingType: o.packingType || 'Box',
+    folderName: o.folderName || '',
+    remarks: o.remarks || ''
+  };
+  orderState.view = 'FORM';
+  renderOrderModule();
 }
 
 async function autoFillPartyInOrder() {
@@ -454,16 +497,24 @@ async function saveOrderForm() {
       : { name: partyName, city: partyCity, address: partyCity, agent, phone: '', marka, transport };
     const savedPartyId = await dbPut('parties', partyObj);
 
-    const orderId = await dbPut('orders', {
+    const wasEdit = !!orderState.editId;
+    const orderPayload = {
       orderNo, date, firmId, partyId: savedPartyId, partyName, partyCity, agent,
       items: orderState.items, marka, transport, packingType, folderName, remarks,
-      createdAt: Date.now()
-    });
+      createdAt: orderState.origCreatedAt || Date.now()
+    };
+    if (orderState.editId) orderPayload.id = orderState.editId;
 
-    if (confirm(`✅ Order #${orderNo} Save ho gaya! Kya abhi Print / PDF nikalna hai?`)) {
+    const orderId = await dbPut('orders', orderPayload);
+
+    if (confirm(`✅ Order #${orderNo} ${wasEdit ? 'Update' : 'Save'} ho gaya! Kya abhi Print / PDF nikalna hai?`)) {
       await printOrderById(orderId);
     }
     orderState.items = [];
+    orderState.editId = null;
+    orderState.origCreatedAt = null;
+    orderState.draft = null;
+    if (wasEdit) orderState.view = 'LIST';
     renderOrderModule();
   } catch (err) { alert('Order Save Error: ' + err.message); }
 }
