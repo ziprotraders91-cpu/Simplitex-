@@ -1,4 +1,5 @@
-// === SimpliTex File 5 v3: Daily Daybook & Bunkar Passbook (2-Stage Barcoding + Indexed Lookup) ===
+// === SimpliTex Module 8 v4: Daily Daybook & Karigar/Bunkar Passbook ===
+// Features: Karigar-Wise JW Wapsi Breakdown, Damage Tracking, Auto-Convert Tagging, Indexed Lookup.
 
 const _DBK_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
 let daybookState = { date: '', showAll: false };
@@ -72,7 +73,7 @@ window.handleModuleEscape = function () {
   return false;
 };
 
-// === 1. BUNKAR PASSBOOK (Indexed Barcoding + 15-Row Pager) ===
+// === 1. KARIGAR / BUNKAR PASSBOOK ===
 async function openBunkarPassbook(bunkarName) {
   await openDB();
   const jwLedger = await dbGetAll('jobWorkLedger');
@@ -80,6 +81,11 @@ async function openBunkarPassbook(bunkarName) {
     ? await dbGetByIndex('barcodingLogs', 'sourceName', bunkarName)
     : (await dbGetAll('barcodingLogs')).filter((b) => b.sourceName === bunkarName);
   const curStock = await dbGet('bunkarStock', bunkarName);
+
+  const analytics = (typeof window.stxGetJWAnalytics === 'function')
+    ? await window.stxGetJWAnalytics()
+    : { inAllocMap: {} };
+  const allocMap = analytics.inAllocMap || {};
 
   const entries = [];
 
@@ -89,8 +95,7 @@ async function openBunkarPassbook(bunkarName) {
         date: l.date, ts: l.createdAt || 0, type: '🏠 Direct Baithak',
         detail: l.note || 'Baithak Inward', qtyText: `+${l.qty}`, color: '#15803d'
       });
-    }
-    if (l.direction === 'OUT' && Array.isArray(l.batchItems)) {
+    } else if (l.direction === 'OUT' && Array.isArray(l.batchItems)) {
       const hit = l.batchItems.find((b) => b.bunkarName === bunkarName);
       if (hit) {
         entries.push({
@@ -99,22 +104,33 @@ async function openBunkarPassbook(bunkarName) {
           qtyText: `-${hit.qty}`, color: '#b91c1c'
         });
       }
+    } else if (l.direction === 'IN' && l.jobWorkType !== 'DIRECT_BAITHAK') {
+      const allocs = allocMap[l.id] || [];
+      const hit = allocs.find((a) => a.bunkarName === bunkarName);
+      if (hit && hit.qty > 0) {
+        entries.push({
+          date: l.date, ts: l.createdAt || 0, type: `↩️ ${l.jobWorkType} Wapsi`,
+          detail: `From Worker: ${l.workerName}${l.note ? ' (' + l.note + ')' : ''}`,
+          qtyText: `+${hit.qty}`, color: '#15803d'
+        });
+      }
     }
   });
 
   bcLogs.forEach((b) => {
     if (b.sourceName === bunkarName && !b.fromConverted) {
       const isConv = b.mode === 'STOCK_CONVERT';
+      const convLabel = b.autoFromJwInId ? '⚡ Auto Convert' : '🔄 Dukan Convert';
       entries.push({
         date: b.date, ts: b.createdAt || 0,
-        type: isConv ? '🔄 Dukan Convert' : '🏷️ Barcoding',
+        type: isConv ? convLabel : '🏷️ Barcoding',
         detail: isConv ? b.designName : `${b.designName}${b.firmCode ? ' (' + b.firmCode + ')' : ''}`,
         qtyText: `-${b.qty}`, color: '#1d4ed8'
       });
     }
   });
 
-  entries.sort((a, b) => b.ts - a.ts);
+  entries.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.ts - a.ts));
 
   const sec = document.getElementById('tab-stock-detail');
   const oldPB = document.getElementById('bunkarPassbookCard');
@@ -126,7 +142,7 @@ async function openBunkarPassbook(bunkarName) {
   card.className = 'card';
   card.innerHTML = `
     <div class="card-head">
-      <h2>📜 Bunkar Passbook: ${_escDBK(bunkarName)} (Available: ${curStock ? curStock.qty : 0} Pcs)</h2>
+      <h2>📜 Karigar Passbook: ${_escDBK(bunkarName)} (Available: ${curStock ? curStock.qty : 0} Pcs)</h2>
       <button class="btn btn-light btn-sm" onclick="document.getElementById('bunkarPassbookCard').remove()">X Close (Esc)</button>
     </div>
     <div id="bunkarPassbookPager"></div>
@@ -148,13 +164,13 @@ async function openBunkarPassbook(bunkarName) {
         <td><b style="color:${e.color};">${_escDBK(e.qtyText)}</b></td>
       </tr>
     `,
-    emptyHtml: '<tr><td colspan="4">Is Bunkar ka koi record nahi hai</td></tr>'
+    emptyHtml: '<tr><td colspan="4">Is Karigar ka koi record nahi hai</td></tr>'
   });
 
   card.scrollIntoView({ behavior: 'smooth' });
 }
 
-// === 2. DAILY DAYBOOK (Fast Date-Indexed Lookup + 15-Row Pager) ===
+// === 2. DAILY DAYBOOK ===
 async function renderDaybook() {
   await openDB();
   const box = document.getElementById('tab-daybook');
@@ -179,27 +195,44 @@ async function renderDaybook() {
     ? await dbGetByIndex('challans', 'date', targetDate)
     : (await dbGetAll('challans')).filter((x) => daybookState.showAll || x.date === targetDate);
 
-  let sumBaithak = 0, sumJWOut = 0, sumJWIn = 0, sumConverted = 0, sumBarcoded = 0, sumChallanPcs = 0, sumChallanAmt = 0;
+  const analytics = (typeof window.stxGetJWAnalytics === 'function')
+    ? await window.stxGetJWAnalytics()
+    : { inAllocMap: {} };
+  const allocMap = analytics.inAllocMap || {};
+
+  let sumBaithak = 0, sumJWOut = 0, sumJWIn = 0, sumJWDmg = 0, sumConverted = 0, sumBarcoded = 0, sumChallanPcs = 0, sumChallanAmt = 0;
   const rows = [];
 
   jwLedger.forEach((l) => {
     if (l.direction === 'IN' && l.jobWorkType === 'DIRECT_BAITHAK') {
-      sumBaithak += l.qty;
+      sumBaithak += Number(l.qty) || 0;
       rows.push({ date: l.date, ts: l.createdAt || 0, mod: '🏠 Baithak In', who: l.bunkarName, detail: l.note || '-', val: `+${l.qty} Pcs` });
     } else if (l.direction === 'OUT') {
-      sumJWOut += l.qty;
+      sumJWOut += Number(l.qty) || 0;
       const bText = (l.batchItems || []).map((b) => `${b.bunkarName === _DBK_POOL ? 'POOL' : b.bunkarName}(${b.qty})`).join(', ');
       rows.push({ date: l.date, ts: l.createdAt || 0, mod: `📤 ${l.jobWorkType} Out`, who: l.workerName, detail: `${l.jobWorkNo ? '#' + l.jobWorkNo + ' | ' : ''}${bText}`, val: `${l.qty} Pcs` });
     } else if (l.direction === 'IN') {
-      sumJWIn += l.qty;
-      rows.push({ date: l.date, ts: l.createdAt || 0, mod: `📥 ${l.jobWorkType} Wapsi`, who: l.workerName, detail: l.note || 'Total Wapsi', val: `+${l.qty} Pcs` });
+      const ok = Number(l.qty) || 0;
+      const dmg = Number(l.damageQty) || 0;
+      sumJWIn += ok;
+      sumJWDmg += dmg;
+      const allocs = allocMap[l.id] || [];
+      const kTxt = allocs.length
+        ? allocs.map((a) => `${a.bunkarName === _DBK_POOL ? 'POOL' : a.bunkarName}(${a.qty})`).join(', ')
+        : (l.note || 'Total Wapsi');
+      rows.push({
+        date: l.date, ts: l.createdAt || 0, mod: `📥 ${l.jobWorkType} Wapsi`,
+        who: l.workerName,
+        detail: `${kTxt}${l.note && allocs.length ? ' | ' + l.note : ''}`,
+        val: `+${ok} OK${dmg > 0 ? ' (Dmg:' + dmg + ')' : ''}`
+      });
     }
   });
 
   bcLogs.forEach((b) => {
     const isConv = b.mode === 'STOCK_CONVERT';
-    if (isConv) sumConverted += b.qty;
-    else sumBarcoded += b.qty;
+    if (isConv) sumConverted += Number(b.qty) || 0;
+    else sumBarcoded += Number(b.qty) || 0;
 
     const srcTxt = b.fromConverted
       ? `Converted: ${b.sourceName}`
@@ -207,7 +240,7 @@ async function renderDaybook() {
 
     rows.push({
       date: b.date, ts: b.createdAt || 0,
-      mod: isConv ? '🔄 Stock Convert' : '🏷️ Challan Barcode',
+      mod: isConv ? (b.autoFromJwInId ? '⚡ Auto Convert' : '🔄 Stock Convert') : '🏷️ Challan Barcode',
       who: isConv ? b.designName : `${b.designName}${b.firmCode ? ' (' + b.firmCode + ')' : ''}`,
       detail: `From: ${srcTxt}`,
       val: `${b.qty} Pcs`
@@ -227,12 +260,12 @@ async function renderDaybook() {
     rows.push({
       date: c.date, ts: c.createdAt || 0, mod: '🚚 Challan',
       who: `${c.partyName} (${c.partyCity})`,
-      detail: `Challan #${c.challanNo} | ${c.transport || '-'}`,
+      detail: `Challan #${c.challanNo}${c.orderNo ? ' (Ord #' + c.orderNo + ')' : ''} | ${c.transport || '-'}`,
       val: `${c.totalPcs} Pcs (₹${Number(c.totalAmount || 0).toLocaleString('en-IN')})`
     });
   });
 
-  rows.sort((a, b) => b.ts - a.ts);
+  rows.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.ts - a.ts));
 
   box.innerHTML = `
     <div class="card">
@@ -241,29 +274,23 @@ async function renderDaybook() {
         <button class="btn btn-light btn-sm" onclick="openTabByName('tab-dash')">← Gateway (Esc)</button>
       </div>
 
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
-        <label style="margin:0;">Date:</label>
-        <input type="date" style="width:auto;" value="${_escDBK(targetDate)}"
-               onchange="daybookState.date=this.value; daybookState.showAll=false; if(window._stxPagerState) delete window._stxPagerState['daybookPager']; renderDaybook();" />
+      <div class="stx-filter-bar">
+        <div class="stx-f-item" style="max-width:190px;">
+          <label>Date</label>
+          <input type="date" value="${_escDBK(targetDate)}"
+                 onchange="daybookState.date=this.value; daybookState.showAll=false; if(window._stxPagerState) delete window._stxPagerState['daybookPager']; renderDaybook();" />
+        </div>
         <button class="btn btn-dark btn-sm" onclick="daybookState.date=_todayDBK(); daybookState.showAll=false; if(window._stxPagerState) delete window._stxPagerState['daybookPager']; renderDaybook();">Aaj (Today)</button>
         <button class="btn btn-light btn-sm" onclick="daybookState.showAll=!daybookState.showAll; if(window._stxPagerState) delete window._stxPagerState['daybookPager']; renderDaybook();">
           ${daybookState.showAll ? 'Sirf Selected Date' : 'All Dates (Sabhi)'}
         </button>
       </div>
 
-      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; margin-bottom:14px;">
-        <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:8px; border-radius:8px; text-align:center;">
-          <small>Baithak In</small><br/><b>+${sumBaithak} Pcs</b>
-        </div>
-        <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:8px; border-radius:8px; text-align:center;">
-          <small>JW Out / Wapsi</small><br/><b>${sumJWOut} / +${sumJWIn}</b>
-        </div>
-        <div style="background:#fefce8; border:1px solid #fef08a; padding:8px; border-radius:8px; text-align:center;">
-          <small>Convert / Barcode</small><br/><b>${sumConverted} / ${sumBarcoded} Pcs</b>
-        </div>
-        <div style="background:#fef2f2; border:1px solid #fecaca; padding:8px; border-radius:8px; text-align:center;">
-          <small>Challan Sale</small><br/><b>${sumChallanPcs} Pcs (₹${sumChallanAmt.toLocaleString('en-IN')})</b>
-        </div>
+      <div class="stx-summary-strip">
+        <div class="stx-summary-pill"><small>Baithak In</small><b style="color:#16a34a;">+${sumBaithak} Pcs</b></div>
+        <div class="stx-summary-pill"><small>JW Out / Wapsi</small><b style="color:#2563eb;">${sumJWOut} / +${sumJWIn}${sumJWDmg > 0 ? ' (Dmg:' + sumJWDmg + ')' : ''}</b></div>
+        <div class="stx-summary-pill"><small>Convert / Barcode</small><b style="color:#d97706;">${sumConverted} / ${sumBarcoded} Pcs</b></div>
+        <div class="stx-summary-pill"><small>Challan Sale</small><b style="color:#0f172a;">${sumChallanPcs} Pcs (₹${sumChallanAmt.toLocaleString('en-IN')})</b></div>
       </div>
 
       <div id="daybookPager"></div>
@@ -274,7 +301,7 @@ async function renderDaybook() {
     id: 'daybookPager',
     items: rows,
     perPage: 15,
-    placeholder: '🔍 Party, Worker, Bunkar, Design, Transport ya Bill No. search karein...',
+    placeholder: '🔍 Party, Worker, Karigar, Design, Transport ya Bill No. search karein...',
     headHtml: '<tr><th>Date</th><th>Module</th><th>Party / Worker / Design</th><th>Detail</th><th>Qty / Value</th></tr>',
     getSearchText: (r) => `${r.date} ${r.mod} ${r.who} ${r.detail} ${r.val}`,
     renderRow: (r) => `
