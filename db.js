@@ -1,4 +1,4 @@
-// === SimpliTex Database Engine v4 (DB v3: convertedStock + 4-Stage Exact Auto Stock Engine) ===
+// === SimpliTex Database Engine v5 (Dual Mode: IndexedDB + Offline Multi-PC LAN Server) ===
 const DB_NAME = 'SimpliTexDB';
 const DB_VERSION = 3;
 let dbInstance = null;
@@ -7,8 +7,200 @@ if (navigator.storage && navigator.storage.persist) {
   navigator.storage.persist().catch(() => {});
 }
 
+// === LAN MULTI-PC ENGINE STATE ===
+const STX_SHARED_META_KEYS = [
+  'simplitex_license',
+  'simplitex_opening_stock',
+  'simplitex_karigar_design_map',
+  'simplitex_jw_work_details'
+];
+const STX_CLIENT_ID = 'stx_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now();
+
+let stxLanMode = false;
+let stxLanInfo = null;
+let stxLanInitPromise = null;
+let stxEventSource = null;
+let stxSuppressMetaHook = false;
+
+// Wrap localStorage setItem/removeItem so shared keys auto-sync to LAN Server
+(function installSharedLocalStorageHook() {
+  try {
+    const origSetItem = Storage.prototype.setItem;
+    const origRemoveItem = Storage.prototype.removeItem;
+
+    Storage.prototype.setItem = function (key, value) {
+      origSetItem.call(this, key, value);
+      if (this === window.localStorage && stxLanMode && !stxSuppressMetaHook && STX_SHARED_META_KEYS.includes(key)) {
+        stxPushMetaPatch({ [key]: String(value) }).catch(() => {});
+      }
+    };
+
+    Storage.prototype.removeItem = function (key) {
+      origRemoveItem.call(this, key);
+      if (this === window.localStorage && stxLanMode && !stxSuppressMetaHook && STX_SHARED_META_KEYS.includes(key)) {
+        stxPushMetaPatch({ [key]: null }).catch(() => {});
+      }
+    };
+  } catch (_) {}
+})();
+
+function stxApplySharedMeta(sharedStorage) {
+  if (!sharedStorage || typeof sharedStorage !== 'object') return;
+  stxSuppressMetaHook = true;
+  try {
+    STX_SHARED_META_KEYS.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(sharedStorage, key)) {
+        const val = sharedStorage[key];
+        if (val === null || val === undefined) {
+          localStorage.removeItem(key);
+        } else {
+          localStorage.setItem(key, typeof val === 'string' ? val : JSON.stringify(val));
+        }
+      }
+    });
+  } finally {
+    stxSuppressMetaHook = false;
+  }
+}
+
+async function stxApiFetch(url, options = {}) {
+  const headers = Object.assign(
+    {
+      'Content-Type': 'application/json',
+      'X-Client-Id': STX_CLIENT_ID
+    },
+    options.headers || {}
+  );
+  const res = await fetch(url, Object.assign({}, options, { headers, cache: 'no-store' }));
+  let json = null;
+  try {
+    json = await res.json();
+  } catch (_) {
+    json = null;
+  }
+  if (!res.ok) {
+    throw new Error((json && json.error) || `LAN API Error (${res.status})`);
+  }
+  return json;
+}
+
+async function stxPushMetaPatch(patch) {
+  if (!stxLanMode) return;
+  return stxApiFetch('/api/meta', {
+    method: 'POST',
+    body: JSON.stringify({ patch })
+  });
+}
+
+async function stxSyncSharedMeta() {
+  if (!stxLanMode) return;
+  const res = await stxApiFetch('/api/meta');
+  if (res && res.sharedStorage) {
+    stxApplySharedMeta(res.sharedStorage);
+  }
+}
+window.stxSyncSharedMeta = stxSyncSharedMeta;
+
+function stxConnectLanEvents() {
+  if (!stxLanMode || typeof EventSource === 'undefined') return;
+  if (stxEventSource) {
+    try { stxEventSource.close(); } catch (_) {}
+  }
+
+  stxEventSource = new EventSource('/api/events');
+  stxEventSource.addEventListener('update', async (ev) => {
+    try {
+      const detail = JSON.parse(ev.data || '{}');
+      if (detail.sourceClientId && detail.sourceClientId === STX_CLIENT_ID) {
+        return; // Isi browser tab ne update bheja hai
+      }
+      if (Array.isArray(detail.stores) && detail.stores.includes('_meta')) {
+        await stxSyncSharedMeta().catch(() => {});
+      }
+      window.dispatchEvent(new CustomEvent('stx-lan-sync', { detail }));
+    } catch (_) {}
+  });
+}
+
+function stxInitLanMode() {
+  if (stxLanInitPromise) return stxLanInitPromise;
+
+  stxLanInitPromise = (async () => {
+    const proto = window.location.protocol;
+    const host = window.location.hostname || '';
+
+    // GitHub Pages ya file:// par hamesha IndexedDB mode rakhein
+    if (proto === 'file:' || host.endsWith('github.io')) {
+      stxLanMode = false;
+      return false;
+    }
+
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 1800) : null;
+
+    try {
+      const res = await fetch('/api/ping', {
+        cache: 'no-store',
+        signal: controller ? controller.signal : undefined
+      });
+      if (timer) clearTimeout(timer);
+      if (!res.ok) {
+        stxLanMode = false;
+        return false;
+      }
+      const data = await res.json();
+      if (data && data.ok && data.mode === 'LAN_SERVER') {
+        stxLanMode = true;
+        stxLanInfo = data;
+        window.STX_LAN_MODE = true;
+        window.STX_LAN_INFO = data;
+
+        // Server se shared settings/opening stock/license turant sync karein
+        await stxSyncSharedMeta().catch(() => {});
+
+        // Agar Server par abhi shared keys nahi hain aur localStorage me maujood hain, toh initial push karein
+        const metaRes = await stxApiFetch('/api/meta').catch(() => null);
+        const serverMeta = (metaRes && metaRes.sharedStorage) || {};
+        const initialPatch = {};
+        let hasPatch = false;
+        STX_SHARED_META_KEYS.forEach((k) => {
+          if (!Object.prototype.hasOwnProperty.call(serverMeta, k)) {
+            const localVal = localStorage.getItem(k);
+            if (localVal !== null) {
+              initialPatch[k] = localVal;
+              hasPatch = true;
+            }
+          }
+        });
+        if (hasPatch) {
+          await stxPushMetaPatch(initialPatch).catch(() => {});
+        }
+
+        stxConnectLanEvents();
+        return true;
+      }
+    } catch (_) {
+      if (timer) clearTimeout(timer);
+    }
+
+    stxLanMode = false;
+    window.STX_LAN_MODE = false;
+    return false;
+  })();
+
+  return stxLanInitPromise;
+}
+
+window.stxLanReady = stxInitLanMode();
+window.stxIsLanMode = () => stxLanMode;
+
+// === INDEXEDDB ENGINE (Single-PC / GitHub Pages Mode) ===
 function openDB() {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
+    await stxInitLanMode();
+    if (stxLanMode) {
+      return resolve({ isLanProxy: true });
+    }
     if (dbInstance) return resolve(dbInstance);
     const req = indexedDB.open(DB_NAME, DB_VERSION);
 
@@ -111,6 +303,15 @@ function openDB() {
 }
 
 async function dbPut(storeName, data) {
+  await stxInitLanMode();
+  if (stxLanMode) {
+    const res = await stxApiFetch(`/api/store/${encodeURIComponent(storeName)}/put`, {
+      method: 'PUT',
+      body: JSON.stringify({ value: data })
+    });
+    return res.key;
+  }
+
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite');
@@ -121,6 +322,12 @@ async function dbPut(storeName, data) {
 }
 
 async function dbGet(storeName, key) {
+  await stxInitLanMode();
+  if (stxLanMode) {
+    const res = await stxApiFetch(`/api/store/${encodeURIComponent(storeName)}/${encodeURIComponent(String(key))}`);
+    return res.item === null ? undefined : res.item;
+  }
+
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readonly');
@@ -131,6 +338,12 @@ async function dbGet(storeName, key) {
 }
 
 async function dbGetAll(storeName) {
+  await stxInitLanMode();
+  if (stxLanMode) {
+    const res = await stxApiFetch(`/api/store/${encodeURIComponent(storeName)}`);
+    return Array.isArray(res.items) ? res.items : [];
+  }
+
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readonly');
@@ -141,6 +354,12 @@ async function dbGetAll(storeName) {
 }
 
 async function dbGetByIndex(storeName, indexName, value) {
+  await stxInitLanMode();
+  if (stxLanMode) {
+    const list = await dbGetAll(storeName);
+    return list.filter((item) => item && item[indexName] === value);
+  }
+
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readonly');
@@ -161,6 +380,12 @@ async function dbGetByIndex(storeName, indexName, value) {
 }
 
 async function dbCount(storeName) {
+  await stxInitLanMode();
+  if (stxLanMode) {
+    const list = await dbGetAll(storeName);
+    return list.length;
+  }
+
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readonly');
@@ -171,6 +396,12 @@ async function dbCount(storeName) {
 }
 
 async function dbGetMaxField(storeName, indexName) {
+  await stxInitLanMode();
+  if (stxLanMode) {
+    const list = await dbGetAll(storeName);
+    return list.reduce((m, x) => Math.max(m, Number(x && x[indexName]) || 0), 0);
+  }
+
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readonly');
@@ -194,6 +425,14 @@ async function dbGetMaxField(storeName, indexName) {
 }
 
 async function dbDelete(storeName, key) {
+  await stxInitLanMode();
+  if (stxLanMode) {
+    await stxApiFetch(`/api/store/${encodeURIComponent(storeName)}/${encodeURIComponent(String(key))}`, {
+      method: 'DELETE'
+    });
+    return true;
+  }
+
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite');
@@ -203,8 +442,177 @@ async function dbDelete(storeName, key) {
   });
 }
 
+// === SHARED 4-STAGE STOCK COMPUTATION ===
+function stxComputeStockMaps(opening, jwLedger, bcLogs, challans) {
+  const bunkarMap = {};
+  const convertedMap = {};
+  const pendingMap = {};
+  const readyMap = {};
+
+  // 1. Year Closing Opening Stock
+  if (opening) {
+    (opening.bunkarStock || []).forEach((b) => {
+      if (b && b.bunkarName) bunkarMap[b.bunkarName] = (bunkarMap[b.bunkarName] || 0) + (Number(b.qty) || 0);
+    });
+    (opening.convertedStock || []).forEach((c) => {
+      if (c && c.designName) convertedMap[c.designName] = { designName: c.designName, specLine: c.specLine || '', qty: Number(c.qty) || 0 };
+    });
+    (opening.jobWorkPending || []).forEach((p) => {
+      if (p && p.id) pendingMap[p.id] = { id: p.id, workerName: p.workerName, jobWorkType: p.jobWorkType, qty: Number(p.qty) || 0 };
+    });
+    (opening.readyStock || []).forEach((r) => {
+      if (r && r.skuKey) readyMap[r.skuKey] = { ...r, qty: Number(r.qty) || 0 };
+    });
+  }
+
+  // 2. Replay Job Work & Direct Baithak Ledger
+  (jwLedger || []).forEach((l) => {
+    const qty = Number(l.qty) || 0;
+    if (l.direction === 'IN' && l.jobWorkType === 'DIRECT_BAITHAK') {
+      if (l.bunkarName) bunkarMap[l.bunkarName] = (bunkarMap[l.bunkarName] || 0) + qty;
+    } else if (l.direction === 'OUT') {
+      (l.batchItems || []).forEach((row) => {
+        if (row && row.bunkarName) {
+          bunkarMap[row.bunkarName] = (bunkarMap[row.bunkarName] || 0) - (Number(row.qty) || 0);
+        }
+      });
+      const pendId = `${l.workerName}__${l.jobWorkType}`;
+      if (!pendingMap[pendId]) {
+        pendingMap[pendId] = { id: pendId, workerName: l.workerName, jobWorkType: l.jobWorkType, qty: 0 };
+      }
+      pendingMap[pendId].qty += qty;
+    } else if (l.direction === 'IN') {
+      const pendId = `${l.workerName}__${l.jobWorkType}`;
+      if (!pendingMap[pendId]) {
+        pendingMap[pendId] = { id: pendId, workerName: l.workerName, jobWorkType: l.jobWorkType, qty: 0 };
+      }
+      pendingMap[pendId].qty -= qty;
+      bunkarMap['__JW_POOL__'] = (bunkarMap['__JW_POOL__'] || 0) + qty;
+    }
+  });
+
+  // 3. Replay Stock Convert & Manual Barcoding Logs
+  (bcLogs || []).forEach((b) => {
+    const qty = Number(b.qty) || 0;
+    if (b.mode === 'STOCK_CONVERT') {
+      if (b.sourceName) {
+        bunkarMap[b.sourceName] = (bunkarMap[b.sourceName] || 0) - qty;
+      }
+      if (b.designName) {
+        if (!convertedMap[b.designName]) {
+          convertedMap[b.designName] = { designName: b.designName, specLine: b.specLine || '', qty: 0 };
+        } else if (b.specLine) {
+          convertedMap[b.designName].specLine = b.specLine;
+        }
+        convertedMap[b.designName].qty += qty;
+      }
+    } else {
+      if (b.fromConverted) {
+        if (b.sourceName) {
+          if (!convertedMap[b.sourceName]) {
+            convertedMap[b.sourceName] = { designName: b.sourceName, specLine: b.specLine || '', qty: 0 };
+          }
+          convertedMap[b.sourceName].qty -= qty;
+        }
+      } else if (b.sourceName) {
+        bunkarMap[b.sourceName] = (bunkarMap[b.sourceName] || 0) - qty;
+      }
+
+      const skuKey = `${b.designName}__${b.firmCode}`;
+      if (!readyMap[skuKey]) {
+        readyMap[skuKey] = {
+          skuKey,
+          designName: b.designName,
+          firmCode: b.firmCode,
+          specLine: b.specLine || '',
+          barcodeVal: b.barcodeVal || `${b.designName} ${b.firmCode}`,
+          qty: 0
+        };
+      } else if (b.specLine) {
+        readyMap[skuKey].specLine = b.specLine;
+      }
+      readyMap[skuKey].qty += qty;
+    }
+  });
+
+  // 4. Replay Challans
+  (challans || []).forEach((c) => {
+    (c.items || []).forEach((it) => {
+      const skuKey = it.skuKey || `${it.designName}__${it.firmCode}`;
+      if (!readyMap[skuKey]) {
+        readyMap[skuKey] = {
+          skuKey,
+          designName: it.designName,
+          firmCode: it.firmCode,
+          specLine: '',
+          barcodeVal: `${it.designName} ${it.firmCode}`,
+          qty: 0
+        };
+      }
+      readyMap[skuKey].qty -= (Number(it.qty) || 0);
+    });
+  });
+
+  const nowIso = new Date().toISOString();
+  const bunkarList = Object.keys(bunkarMap)
+    .filter((name) => bunkarMap[name] > 0)
+    .map((name) => ({ bunkarName: name, qty: bunkarMap[name], updatedAt: nowIso }));
+
+  const convertedList = Object.keys(convertedMap)
+    .filter((dName) => convertedMap[dName].qty > 0)
+    .map((dName) => ({ ...convertedMap[dName], updatedAt: nowIso }));
+
+  const pendingList = Object.keys(pendingMap)
+    .filter((id) => pendingMap[id].qty > 0)
+    .map((id) => ({ ...pendingMap[id] }));
+
+  const readyList = Object.keys(readyMap)
+    .filter((skuKey) => readyMap[skuKey].qty > 0)
+    .map((skuKey) => ({ ...readyMap[skuKey], updatedAt: nowIso }));
+
+  return { bunkarList, convertedList, pendingList, readyList };
+}
+
 // === 4-STAGE EXACT AUTO STOCK ENGINE ===
 async function stxRecalculateAllStock() {
+  await stxInitLanMode();
+
+  if (stxLanMode) {
+    const snap = await stxApiFetch('/api/snapshot');
+    if (snap && snap.sharedStorage) {
+      stxApplySharedMeta(snap.sharedStorage);
+    }
+    let opening = null;
+    try {
+      opening = JSON.parse(localStorage.getItem('simplitex_opening_stock') || 'null');
+    } catch (_) {}
+
+    const stores = (snap && snap.stores) || {};
+    const { bunkarList, convertedList, pendingList, readyList } = stxComputeStockMaps(
+      opening,
+      stores.jobWorkLedger || [],
+      stores.barcodingLogs || [],
+      stores.challans || []
+    );
+
+    await stxApiFetch('/api/tx', {
+      method: 'POST',
+      body: JSON.stringify({
+        ops: [
+          { store: 'bunkarStock', action: 'clear' },
+          { store: 'bunkarStock', action: 'bulkPut', items: bunkarList },
+          { store: 'convertedStock', action: 'clear' },
+          { store: 'convertedStock', action: 'bulkPut', items: convertedList },
+          { store: 'jobWorkPending', action: 'clear' },
+          { store: 'jobWorkPending', action: 'bulkPut', items: pendingList },
+          { store: 'readyStock', action: 'clear' },
+          { store: 'readyStock', action: 'bulkPut', items: readyList }
+        ]
+      })
+    });
+    return true;
+  }
+
   const db = await openDB();
   let opening = null;
   try {
@@ -224,147 +632,28 @@ async function stxRecalculateAllStock() {
       doneCount++;
       if (doneCount < 3) return;
 
-      const bunkarMap = {};
-      const convertedMap = {};
-      const pendingMap = {};
-      const readyMap = {};
+      const { bunkarList, convertedList, pendingList, readyList } = stxComputeStockMaps(
+        opening,
+        jwLedger,
+        bcLogs,
+        challans
+      );
 
-      // 1. Year Closing Opening Stock
-      if (opening) {
-        (opening.bunkarStock || []).forEach((b) => {
-          if (b && b.bunkarName) bunkarMap[b.bunkarName] = (bunkarMap[b.bunkarName] || 0) + (Number(b.qty) || 0);
-        });
-        (opening.convertedStock || []).forEach((c) => {
-          if (c && c.designName) convertedMap[c.designName] = { designName: c.designName, specLine: c.specLine || '', qty: Number(c.qty) || 0 };
-        });
-        (opening.jobWorkPending || []).forEach((p) => {
-          if (p && p.id) pendingMap[p.id] = { id: p.id, workerName: p.workerName, jobWorkType: p.jobWorkType, qty: Number(p.qty) || 0 };
-        });
-        (opening.readyStock || []).forEach((r) => {
-          if (r && r.skuKey) readyMap[r.skuKey] = { ...r, qty: Number(r.qty) || 0 };
-        });
-      }
-
-      // 2. Replay Job Work & Direct Baithak Ledger
-      jwLedger.forEach((l) => {
-        const qty = Number(l.qty) || 0;
-        if (l.direction === 'IN' && l.jobWorkType === 'DIRECT_BAITHAK') {
-          if (l.bunkarName) bunkarMap[l.bunkarName] = (bunkarMap[l.bunkarName] || 0) + qty;
-        } else if (l.direction === 'OUT') {
-          (l.batchItems || []).forEach((row) => {
-            if (row && row.bunkarName) {
-              bunkarMap[row.bunkarName] = (bunkarMap[row.bunkarName] || 0) - (Number(row.qty) || 0);
-            }
-          });
-          const pendId = `${l.workerName}__${l.jobWorkType}`;
-          if (!pendingMap[pendId]) {
-            pendingMap[pendId] = { id: pendId, workerName: l.workerName, jobWorkType: l.jobWorkType, qty: 0 };
-          }
-          pendingMap[pendId].qty += qty;
-        } else if (l.direction === 'IN') {
-          const pendId = `${l.workerName}__${l.jobWorkType}`;
-          if (!pendingMap[pendId]) {
-            pendingMap[pendId] = { id: pendId, workerName: l.workerName, jobWorkType: l.jobWorkType, qty: 0 };
-          }
-          pendingMap[pendId].qty -= qty;
-          bunkarMap['__JW_POOL__'] = (bunkarMap['__JW_POOL__'] || 0) + qty;
-        }
-      });
-
-      // 3. Replay Stock Convert & Manual Barcoding Logs
-      bcLogs.forEach((b) => {
-        const qty = Number(b.qty) || 0;
-        if (b.mode === 'STOCK_CONVERT') {
-          // Stage 2: Bunkar Stock -> Dukan Converted Stock
-          if (b.sourceName) {
-            bunkarMap[b.sourceName] = (bunkarMap[b.sourceName] || 0) - qty;
-          }
-          if (b.designName) {
-            if (!convertedMap[b.designName]) {
-              convertedMap[b.designName] = { designName: b.designName, specLine: b.specLine || '', qty: 0 };
-            } else if (b.specLine) {
-              convertedMap[b.designName].specLine = b.specLine;
-            }
-            convertedMap[b.designName].qty += qty;
-          }
-        } else {
-          // Stage 3: Manual Barcoding (Converted Stock -> Challan Ready Stock)
-          if (b.fromConverted) {
-            if (b.sourceName) {
-              if (!convertedMap[b.sourceName]) {
-                convertedMap[b.sourceName] = { designName: b.sourceName, specLine: b.specLine || '', qty: 0 };
-              }
-              convertedMap[b.sourceName].qty -= qty;
-            }
-          } else if (b.sourceName) {
-            // Purane legacy entries ka backward compatibility
-            bunkarMap[b.sourceName] = (bunkarMap[b.sourceName] || 0) - qty;
-          }
-
-          const skuKey = `${b.designName}__${b.firmCode}`;
-          if (!readyMap[skuKey]) {
-            readyMap[skuKey] = {
-              skuKey,
-              designName: b.designName,
-              firmCode: b.firmCode,
-              specLine: b.specLine || '',
-              barcodeVal: b.barcodeVal || `${b.designName} ${b.firmCode}`,
-              qty: 0
-            };
-          } else if (b.specLine) {
-            readyMap[skuKey].specLine = b.specLine;
-          }
-          readyMap[skuKey].qty += qty;
-        }
-      });
-
-      // 4. Replay Challans
-      challans.forEach((c) => {
-        (c.items || []).forEach((it) => {
-          const skuKey = it.skuKey || `${it.designName}__${it.firmCode}`;
-          if (!readyMap[skuKey]) {
-            readyMap[skuKey] = {
-              skuKey,
-              designName: it.designName,
-              firmCode: it.firmCode,
-              specLine: '',
-              barcodeVal: `${it.designName} ${it.firmCode}`,
-              qty: 0
-            };
-          }
-          readyMap[skuKey].qty -= (Number(it.qty) || 0);
-        });
-      });
-
-      // 5. Write Clean Exact Stock
-      const nowIso = new Date().toISOString();
       const bStore = tx.objectStore('bunkarStock');
       bStore.clear();
-      Object.keys(bunkarMap).forEach((name) => {
-        const q = bunkarMap[name];
-        if (q > 0) bStore.put({ bunkarName: name, qty: q, updatedAt: nowIso });
-      });
+      bunkarList.forEach((item) => bStore.put(item));
 
       const cStore = tx.objectStore('convertedStock');
       cStore.clear();
-      Object.keys(convertedMap).forEach((dName) => {
-        const item = convertedMap[dName];
-        if (item.qty > 0) cStore.put({ ...item, updatedAt: nowIso });
-      });
+      convertedList.forEach((item) => cStore.put(item));
 
       const pStore = tx.objectStore('jobWorkPending');
       pStore.clear();
-      Object.keys(pendingMap).forEach((id) => {
-        const item = pendingMap[id];
-        if (item.qty > 0) pStore.put({ ...item });
-      });
+      pendingList.forEach((item) => pStore.put(item));
 
       const rStore = tx.objectStore('readyStock');
       rStore.clear();
-      Object.keys(readyMap).forEach((skuKey) => {
-        const item = readyMap[skuKey];
-        if (item.qty > 0) rStore.put({ ...item, updatedAt: nowIso });
-      });
+      readyList.forEach((item) => rStore.put(item));
     }
 
     const r1 = tx.objectStore('jobWorkLedger').getAll();
@@ -387,6 +676,22 @@ window.stxRecalculateAllStock = stxRecalculateAllStock;
 
 // 1-Click Full Backup Export (JSON)
 async function exportFullBackup() {
+  await stxInitLanMode();
+
+  if (stxLanMode) {
+    const snap = await stxApiFetch('/api/snapshot');
+    if (snap && snap.sharedStorage) stxApplySharedMeta(snap.sharedStorage);
+    let openingStock = null;
+    try { openingStock = JSON.parse(localStorage.getItem('simplitex_opening_stock') || 'null'); } catch (_) {}
+    const backup = {
+      app: 'SimpliTex',
+      date: new Date().toISOString(),
+      openingStock,
+      stores: snap.stores || {}
+    };
+    return JSON.stringify(backup, null, 2);
+  }
+
   const db = await openDB();
   let openingStock = null;
   try { openingStock = JSON.parse(localStorage.getItem('simplitex_opening_stock') || 'null'); } catch (_) {}
@@ -400,14 +705,31 @@ async function exportFullBackup() {
 // Restore Backup (JSON)
 async function restoreFullBackup(jsonText) {
   const data = JSON.parse(jsonText);
-  if (!data || data.app !== 'SimpliTex' || !data.stores) {
+  if (!data || (data.app !== 'SimpliTex' && data.app !== 'SimpliTex-LAN') || !data.stores) {
     throw new Error('Galat Backup File hai!');
   }
+
+  await stxInitLanMode();
+
   if (data.openingStock) {
     localStorage.setItem('simplitex_opening_stock', JSON.stringify(data.openingStock));
   } else {
     localStorage.removeItem('simplitex_opening_stock');
   }
+
+  if (stxLanMode) {
+    await stxApiFetch('/api/import-full', {
+      method: 'POST',
+      body: JSON.stringify({
+        stores: data.stores,
+        sharedStorage: {
+          simplitex_opening_stock: data.openingStock ? JSON.stringify(data.openingStock) : null
+        }
+      })
+    });
+    return;
+  }
+
   const db = await openDB();
   for (const name of Object.keys(data.stores)) {
     if (!db.objectStoreNames.contains(name)) continue;
@@ -424,8 +746,20 @@ async function restoreFullBackup(jsonText) {
 
 // Tally-Style Year Closing: Purane Bills/Ledger saaf karein, Live Stock & Masters safe rahenge
 async function clearTransactionStoresForNewYear() {
-  const db = await openDB();
+  await stxInitLanMode();
   const txStores = ['jobWorkLedger', 'barcodingLogs', 'orders', 'challans'];
+
+  if (stxLanMode) {
+    await stxApiFetch('/api/tx', {
+      method: 'POST',
+      body: JSON.stringify({
+        ops: txStores.map((store) => ({ store, action: 'clear' }))
+      })
+    });
+    return;
+  }
+
+  const db = await openDB();
   for (const name of txStores) {
     if (!db.objectStoreNames.contains(name)) continue;
     await new Promise((resolve, reject) => {
