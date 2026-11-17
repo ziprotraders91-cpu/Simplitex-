@@ -1,7 +1,7 @@
-// === SimpliTex Module 4 v4: Dual Barcoding + Type-to-Filter + Edit + Auto Stock Engine ===
+// === SimpliTex Module 4 v5: 2-Stage Barcoding (Stock Convert -> Manual Challan Barcoding) ===
 
 const _BC_POOL = (typeof JW_POOL_KEY !== 'undefined') ? JW_POOL_KEY : '__JW_POOL__';
-let bcState = { view: 'FORM', convertRows: [], editId: null, origLog: null };
+let bcState = { view: 'CONVERT', convertRows: [], editId: null, origLog: null };
 let bcSourceListCache = [];
 let bcPickerIndex = { bc: 0, sc: 0 };
 
@@ -34,7 +34,7 @@ window.onTabChanged = function (tabId) {
   if (tabId === 'tab-barcode') {
     bcState.editId = null;
     bcState.origLog = null;
-    if (bcState.view !== 'CONVERT') bcState.view = 'FORM';
+    if (bcState.view !== 'FORM' && bcState.view !== 'CONVERT') bcState.view = 'CONVERT';
     ensureJsBarcodeLoaded();
     renderBarcodeModule();
   }
@@ -53,7 +53,7 @@ window.handleModuleEscape = function () {
       return true;
     }
     if (bcState.view === 'DESIGNS' || bcState.view === 'HISTORY') {
-      bcState.view = 'FORM';
+      bcState.view = 'CONVERT';
       renderBarcodeModule();
       return true;
     }
@@ -68,11 +68,11 @@ function getBarcodeTopNavHtml(designCount) {
 
   return `
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
-      <button type="button" class="btn btn-sm" style="${mStyle('FORM')}" onclick="bcState.editId=null; bcState.origLog=null; bcState.view='FORM'; renderBarcodeModule();">
-        🏷️ Manual Barcoding (Purana)
-      </button>
       <button type="button" class="btn btn-sm" style="${mStyle('CONVERT')}" onclick="bcState.editId=null; bcState.origLog=null; bcState.view='CONVERT'; renderBarcodeModule();">
-        🔄 Stock Convert (Karigar → Design)
+        🔄 1. Stock Convert (Dukan / Order)
+      </button>
+      <button type="button" class="btn btn-sm" style="${mStyle('FORM')}" onclick="bcState.editId=null; bcState.origLog=null; bcState.view='FORM'; renderBarcodeModule();">
+        🏷️ 2. Manual Barcoding (Challan)
       </button>
       <button type="button" class="btn btn-sm" style="${mStyle('DESIGNS')}" onclick="if(window._stxPagerState) delete window._stxPagerState['bcDesignPager']; bcState.editId=null; bcState.view='DESIGNS'; renderBarcodeModule();">
         🎨 Designs (${designCount})
@@ -84,9 +84,12 @@ function getBarcodeTopNavHtml(designCount) {
   `;
 }
 
-// === SEARCHABLE KARIGAR / SOURCE PICKER ===
-function buildSourcePickerHtml(prefix, labelText) {
+// === TYPE-TO-FILTER SOURCE PICKER ===
+function buildSourcePickerHtml(prefix, labelText, placeholderEmpty) {
   const hasStock = bcSourceListCache.length > 0;
+  const ph = hasStock
+    ? (prefix === 'sc' ? 'Karigar naam type karein (e.g. FA)...' : 'Converted Design type karein (e.g. 1070)...')
+    : placeholderEmpty;
   return `
     <div>
       <label>${labelText}</label>
@@ -96,7 +99,7 @@ function buildSourcePickerHtml(prefix, labelText) {
                autocomplete="off"
                data-custom-enter="1"
                data-no-back="1"
-               placeholder="${hasStock ? 'Karigar naam type karein (e.g. FA)...' : '-- Koi Unbarcoded Stock nahi --'}"
+               placeholder="${ph}"
                onfocus="openSourcePicker('${prefix}')"
                oninput="onSourceSearchInput('${prefix}')"
                onkeydown="handleSourcePickerKey('${prefix}', event)"
@@ -112,7 +115,7 @@ function buildSourcePickerHtml(prefix, labelText) {
 
 function getFilteredSourceItems(prefix, query) {
   const q = String(query || '').trim().toUpperCase();
-  const usedInConvert = (prefix === 'sc')
+  const usedInConvert = (prefix === 'sc' && !bcState.editId)
     ? bcState.convertRows.reduce((m, r) => { m[r.sourceName] = (m[r.sourceName] || 0) + r.qty; return m; }, {})
     : {};
 
@@ -161,7 +164,7 @@ function renderSourcePickerDropdown(prefix, query) {
   if (bcPickerIndex[prefix] >= matches.length) bcPickerIndex[prefix] = 0;
 
   if (!matches.length) {
-    drop.innerHTML = `<div style="padding:10px 12px; font-size:12.5px; color:#6b7280;">"${esc(query)}" naam ka koi Karigar stock nahi mila</div>`;
+    drop.innerHTML = `<div style="padding:10px 12px; font-size:12.5px; color:#6b7280;">"${esc(query)}" ka koi stock nahi mila</div>`;
     drop.style.display = 'block';
     return;
   }
@@ -169,9 +172,7 @@ function renderSourcePickerDropdown(prefix, query) {
   drop.innerHTML = matches.map((m, idx) => {
     const active = idx === bcPickerIndex[prefix];
     return `
-      <div class="bc-src-opt"
-           data-idx="${idx}"
-           data-val="${esc(m.value)}"
+      <div class="bc-src-opt" data-idx="${idx}" data-val="${esc(m.value)}"
            onmousedown="event.preventDefault(); pickSourceItem('${prefix}', this.dataset.val)"
            style="padding:9px 12px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f3f4f6; font-size:13px; background:${active ? '#eff6ff' : '#fff'};">
         <b style="color:#111827;">${esc(m.label)}</b>
@@ -201,10 +202,18 @@ async function pickSourceItem(prefix, value) {
     const desEl = document.getElementById('scDesignName');
     if (desEl) { desEl.focus(); desEl.select(); }
   } else {
-    const qtyEl = document.getElementById('bcQty');
+    // Manual Barcoding me Converted Design chunte hi Design Name & Quality auto-fill karein
     const desEl = document.getElementById('bcDesignName');
-    if (qtyEl && !qtyEl.value) qtyEl.placeholder = `Max ${found.qty} Pcs`;
-    if (desEl) desEl.focus();
+    const specEl = document.getElementById('bcSpecLine');
+    const qtyEl = document.getElementById('bcQty');
+    if (desEl) desEl.value = found.value;
+    if (specEl) {
+      if (found.specLine) specEl.value = found.specLine;
+      else await onBCDesignInput();
+    }
+    if (qtyEl) qtyEl.placeholder = `Max ${found.qty} Pcs`;
+    updateStickerPreview();
+    if (qtyEl) { qtyEl.focus(); qtyEl.select(); }
   }
 }
 
@@ -222,7 +231,6 @@ function handleSourcePickerKey(prefix, e) {
     if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
     return;
   }
-
   if (e.key === 'ArrowUp') {
     e.preventDefault();
     if (!matches.length) return;
@@ -232,18 +240,12 @@ function handleSourcePickerKey(prefix, e) {
     if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
     return;
   }
-
   if (e.key === 'Enter') {
     e.preventDefault();
-    if (matches.length) {
-      const chosen = matches[bcPickerIndex[prefix]] || matches[0];
-      pickSourceItem(prefix, chosen.value);
-    } else {
-      closeSourcePicker(prefix);
-    }
+    if (matches.length) pickSourceItem(prefix, (matches[bcPickerIndex[prefix]] || matches[0]).value);
+    else closeSourcePicker(prefix);
     return;
   }
-
   if (e.key === 'Escape') {
     e.stopPropagation();
     closeSourcePicker(prefix);
@@ -259,11 +261,15 @@ async function renderBarcodeModule() {
   // === VIEW 1: DESIGN MASTER ===
   if (bcState.view === 'DESIGNS') {
     const ready = await dbGetAll('readyStock');
+    const converted = await dbGetAll('convertedStock');
     const enriched = designs.map((d) => {
+      const conv = converted.find((c) => c.designName === d.designName && c.qty > 0);
       const stList = ready.filter((r) => r.designName === d.designName && r.qty > 0);
+      const readyTxt = stList.length ? stList.map((r) => `${r.firmCode}: ${r.qty}`).join(', ') : '0';
       return {
         ...d,
-        stockTxt: stList.length ? stList.map((r) => `${r.firmCode}: ${r.qty}`).join(', ') : '0'
+        convQty: conv ? conv.qty : 0,
+        stockTxt: `Dukan: ${conv ? conv.qty : 0} | Challan: ${readyTxt}`
       };
     });
 
@@ -273,122 +279,105 @@ async function renderBarcodeModule() {
           <h2>🎨 Design Master (${designs.length} Designs)</h2>
           <div>
             <button class="btn btn-dark btn-sm" onclick="addNewDesignPrompt()">+ Naya Design</button>
-            <button class="btn btn-light btn-sm" onclick="bcState.view='FORM'; renderBarcodeModule();">← Back (Esc)</button>
+            <button class="btn btn-light btn-sm" onclick="bcState.view='CONVERT'; renderBarcodeModule();">← Back (Esc)</button>
           </div>
         </div>
         ${getBarcodeTopNavHtml(designs.length)}
         <div id="bcDesignPager"></div>
-      </div>
-    `;
+      </div>`;
 
     mountPagedList({
-      id: 'bcDesignPager',
-      items: enriched,
-      perPage: 15,
+      id: 'bcDesignPager', items: enriched, perPage: 15,
       placeholder: '🔍 Design Name, Quality ya Firm Code search karein...',
-      headHtml: '<tr><th>Design Name</th><th>Quality / Spec Line</th><th>Ready Stock</th><th>Action</th></tr>',
+      headHtml: '<tr><th>Design Name</th><th>Quality / Spec Line</th><th>Stock (Dukan / Challan)</th><th>Action</th></tr>',
       getSearchText: (d) => `${d.designName} ${d.specLine || ''} ${d.stockTxt}`,
       renderRow: (d) => `
         <tr>
           <td><b>${esc(d.designName)}</b></td>
           <td><small>${esc(d.specLine || '-')}</small></td>
-          <td><b>${esc(d.stockTxt)}</b></td>
+          <td><small><b>${esc(d.stockTxt)}</b></small></td>
           <td style="white-space:nowrap;">
             <button class="btn btn-dark btn-sm" onclick="quickReprintPrompt('${esc(d.designName)}','${esc(d.specLine || '')}')">🖨️ Sticker</button>
             <button class="btn btn-light btn-sm" onclick="editDesignSpec('${esc(d.designName)}')">✏️ Edit</button>
             <button class="btn btn-danger btn-sm" onclick="deleteDesign('${esc(d.designName)}')">X</button>
           </td>
-        </tr>
-      `,
+        </tr>`,
       emptyHtml: '<tr><td colspan="4">Koi Design nahi mila</td></tr>'
     });
     return;
   }
 
-  // === VIEW 2: BARCODING RECORD (With Edit & Delete) ===
+  // === VIEW 2: BARCODING RECORD ===
   if (bcState.view === 'HISTORY') {
     const logs = (await dbGetAll('barcodingLogs')).sort((a, b) => b.createdAt - a.createdAt);
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>📜 Barcoding & Convert Record (${logs.length})</h2>
-          <button class="btn btn-light btn-sm" onclick="bcState.view='FORM'; renderBarcodeModule();">← Back (Esc)</button>
+          <h2>📜 Stock Convert & Barcoding Record (${logs.length})</h2>
+          <button class="btn btn-light btn-sm" onclick="bcState.view='CONVERT'; renderBarcodeModule();">← Back (Esc)</button>
         </div>
         ${getBarcodeTopNavHtml(designs.length)}
         <div id="bcHistoryPager"></div>
-      </div>
-    `;
+      </div>`;
 
     mountPagedList({
-      id: 'bcHistoryPager',
-      items: logs,
-      perPage: 15,
+      id: 'bcHistoryPager', items: logs, perPage: 15,
       placeholder: '🔍 Date, Karigar, Design ya Firm search karein...',
-      headHtml: '<tr><th>Date</th><th>Type</th><th>Karigar / Source</th><th>Bikri Design & Firm</th><th>Pcs</th><th>Action</th></tr>',
-      getSearchText: (l) => `${l.date} ${l.mode || ''} ${l.sourceName} ${l.designName} ${l.firmCode} ${l.specLine || ''}`,
-      renderRow: (l) => `
-        <tr>
-          <td style="white-space:nowrap;">${esc(l.date)}</td>
-          <td><small>${l.mode === 'STOCK_CONVERT' ? '🔄 Convert' : '🏷️ Manual'}</small></td>
-          <td>${esc(l.sourceName === _BC_POOL ? 'Job Work Pool' : l.sourceName)}</td>
-          <td><b>${esc(l.designName)} ${esc(l.firmCode)}</b><br/><small>${esc(l.specLine || '')}</small></td>
-          <td><b>${l.qty}</b></td>
-          <td style="white-space:nowrap;">
-            <button class="btn btn-dark btn-sm" onclick="printBarcodeStickers('${esc(l.specLine || '')}','${esc(l.designName)}','${esc(l.firmCode)}',${l.qty},'THERMAL')">🖨️</button>
-            <button class="btn btn-light btn-sm" onclick="editBarcodingLog(${l.id})">✏️ Edit</button>
-            <button class="btn btn-danger btn-sm" onclick="reverseBarcodingLog(${l.id})">↩️ Del</button>
-          </td>
-        </tr>
-      `,
-      emptyHtml: '<tr><td colspan="6">Abhi koi Barcoding entry nahi hui</td></tr>'
+      headHtml: '<tr><th>Date</th><th>Stage</th><th>Source</th><th>Design / Barcode</th><th>Pcs</th><th>Action</th></tr>',
+      getSearchText: (l) => `${l.date} ${l.mode || ''} ${l.sourceName} ${l.designName} ${l.firmCode || ''} ${l.specLine || ''}`,
+      renderRow: (l) => {
+        const isConv = l.mode === 'STOCK_CONVERT';
+        const codeTxt = isConv ? l.designName : `${l.designName} ${l.firmCode || ''}`.trim();
+        return `
+          <tr>
+            <td style="white-space:nowrap;">${esc(l.date)}</td>
+            <td><small>${isConv ? '🔄 Dukan Convert' : '🏷️ Challan Barcode'}</small></td>
+            <td>${esc(l.sourceName === _BC_POOL ? 'Job Work Pool' : l.sourceName)}</td>
+            <td><b>${esc(codeTxt)}</b><br/><small>${esc(l.specLine || '')}</small></td>
+            <td><b>${l.qty}</b></td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-dark btn-sm" onclick="printBarcodeStickers('${esc(l.specLine || '')}','${esc(l.designName)}','${esc(l.firmCode || '')}',${l.qty},'THERMAL')">🖨️</button>
+              <button class="btn btn-light btn-sm" onclick="editBarcodingLog(${l.id})">✏️ Edit</button>
+              <button class="btn btn-danger btn-sm" onclick="reverseBarcodingLog(${l.id})">↩️ Del</button>
+            </td>
+          </tr>`;
+      },
+      emptyHtml: '<tr><td colspan="6">Abhi koi entry nahi hui</td></tr>'
     });
     return;
   }
 
-  const rawStocks = await dbGetAll('bunkarStock');
-  const stockMap = {};
-  rawStocks.forEach((s) => { stockMap[s.bunkarName] = s.qty; });
-  if (bcState.view === 'FORM' && bcState.editId && bcState.origLog) {
-    const sn = bcState.origLog.sourceName;
-    stockMap[sn] = (stockMap[sn] || 0) + (Number(bcState.origLog.qty) || 0);
-  }
-
-  bcSourceListCache = Object.keys(stockMap)
-    .filter((k) => stockMap[k] > 0)
-    .map((k) => ({
-      value: k,
-      label: k === _BC_POOL ? 'JOB WORK WAPAS POOL' : k,
-      qty: stockMap[k]
-    }))
-    .sort((a, b) => a.label.localeCompare(b.label));
-
   const firms = await dbGetAll('firms');
+  const isEdit = !!(bcState.editId && bcState.origLog);
+  const oLog = bcState.origLog;
 
-  // === VIEW 3: STOCK CONVERT ===
+  // === VIEW 3: STOCK CONVERT (KARIGAR -> DUKAN DESIGN STOCK, BINA FIRM KE) ===
   if (bcState.view === 'CONVERT') {
+    const rawBunkar = await dbGetAll('bunkarStock');
+    const bMap = {};
+    rawBunkar.forEach((s) => { bMap[s.bunkarName] = s.qty; });
+    if (isEdit && oLog.mode === 'STOCK_CONVERT') {
+      bMap[oLog.sourceName] = (bMap[oLog.sourceName] || 0) + (Number(oLog.qty) || 0);
+    }
+    bcSourceListCache = Object.keys(bMap)
+      .filter((k) => bMap[k] > 0)
+      .map((k) => ({ value: k, label: k === _BC_POOL ? 'JOB WORK WAPAS POOL' : k, qty: bMap[k] }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
     const totalConvertPcs = bcState.convertRows.reduce((s, r) => s + r.qty, 0);
 
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <h2>🔄 Stock Convert (Karigar Saree → Bikri Design Name)</h2>
+          <h2>${isEdit ? '✏️ Edit Stock Convert' : '🔄 1. Stock Convert (Karigar → Dukan Design & Order Form)'}</h2>
+          ${isEdit ? `<button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Cancel Edit</button>` : ''}
         </div>
         ${getBarcodeTopNavHtml(designs.length)}
 
-        ${!firms.length ? `<div style="background:#fef2f2; color:#b91c1c; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px;">
-          ⚠️ Pehle <b>⚙️ Settings</b> me Firm Code (KT / IF) add karein!
-        </div>` : ''}
-
         <div class="grid-2" style="margin-bottom:12px; align-items:start;">
-          <div><label>Date *</label><input type="date" id="scDate" value="${todayISO()}" /></div>
+          <div><label>Date *</label><input type="date" id="scDate" value="${isEdit ? esc(oLog.date) : todayISO()}" /></div>
           <div>
-            <label>Firm Short Code * (KT / IF)</label>
-            <select id="scFirmCode">
-              ${firms.map((f) => `<option value="${esc(f.shortCode)}">${esc(f.name)} (${esc(f.shortCode)})</option>`).join('')}
-            </select>
-          </div>
-          <div style="grid-column: 1 / -1;">
-            <label>Sticker Print Size</label>
+            <label>Dukan Barcode Print Size</label>
             <select id="scPrintMode">
               <option value="THERMAL">Thermal Roll (50mm x 25mm — 1 per label)</option>
               <option value="A4_GRID">A4 Sticker Sheet (Grid)</option>
@@ -398,65 +387,74 @@ async function renderBarcodeModule() {
 
         <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:8px; margin-bottom:12px;">
           <div style="font-size:12px; font-weight:700; color:#1e3a8a; margin-bottom:8px;">
-            Karigar ka naam type karein (e.g. FA likhein → FARHAN dikhega) aur Bikri Design me badlein:
+            Karigar ka naam type karein (e.g. FA → FARHAN) aur Dukan Design Name (e.g. 1070) me convert karein:
           </div>
           <div class="grid-2" style="align-items:start;">
-            ${buildSourcePickerHtml('sc', 'Karigar / Source Saree * (Type Karein)')}
+            ${buildSourcePickerHtml('sc', 'Karigar / Source Saree * (Type Karein)', '-- Koi Unconverted Karigar Stock nahi --')}
             <div>
-              <label>Bikri / Design Name * (e.g. 1070, RASHMIKA)</label>
-              <input id="scDesignName" list="scDesignList" placeholder="e.g. 1070" oninput="onSCDesignInput()" />
-              <datalist id="scDesignList">
-                ${designs.map((d) => `<option value="${esc(d.designName)}">`).join('')}
-              </datalist>
+              <label>Bikri / Design Name * (Order Form me yahi dikhega)</label>
+              <input id="scDesignName" list="scDesignList" value="${isEdit ? esc(oLog.designName) : ''}" placeholder="e.g. 1070, RASHMIKA" oninput="onSCDesignInput()" />
+              <datalist id="scDesignList">${designs.map((d) => `<option value="${esc(d.designName)}">`).join('')}</datalist>
             </div>
+            <div><label>Qty (Pcs) *</label><input type="number" id="scQty" min="1" value="${isEdit ? oLog.qty : ''}" placeholder="e.g. 10" /></div>
             <div>
-              <label>Qty (Pcs) *</label>
-              <input type="number" id="scQty" min="1" placeholder="e.g. 10" />
-            </div>
-            <div>
-              <label>Quality / Top Line (Enter se Add)</label>
-              <input id="scSpecLine" placeholder="e.g. 3.60 CM EMB JHALAR" data-custom-enter="1"
-                     onkeydown="if(event.key==='Enter'){ event.preventDefault(); addStockConvertRow(); }" />
+              <label>Quality / Top Line (Optional)</label>
+              <input id="scSpecLine" value="${isEdit ? esc(oLog.specLine || '') : ''}" placeholder="e.g. 3.60 CM EMB JHALAR" data-custom-enter="1"
+                     onkeydown="if(event.key==='Enter'){ event.preventDefault(); ${isEdit ? 'saveStockConvertBatch()' : 'addStockConvertRow()'}; }" />
             </div>
           </div>
-          <button type="button" class="btn btn-dark btn-sm" style="margin-top:10px;" onclick="addStockConvertRow()">
-            + Add to Convert List
-          </button>
+          ${!isEdit ? `<button type="button" class="btn btn-dark btn-sm" style="margin-top:10px;" onclick="addStockConvertRow()">+ Add to Convert List</button>` : ''}
         </div>
 
-        <div style="overflow-x:auto;">
-          <table>
-            <thead>
-              <tr><th>S.No</th><th>Karigar Name (Source)</th><th>→</th><th>Bikri Design (Firm)</th><th>Quality</th><th>Qty</th><th>X</th></tr>
-            </thead>
-            <tbody id="scRowsBody"></tbody>
-          </table>
-        </div>
+        ${!isEdit ? `
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>S.No</th><th>Karigar Name</th><th>→</th><th>Dukan Design Name</th><th>Quality</th><th>Qty</th><th>X</th></tr></thead>
+              <tbody id="scRowsBody"></tbody>
+            </table>
+          </div>
+        ` : ''}
 
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:14px;">
-          <div style="font-size:17px; font-weight:800;">
-            Total Convert: <span id="scTotalPcs" style="color:#15803d;">${totalConvertPcs} Pcs</span>
-          </div>
+          ${!isEdit ? `<div style="font-size:17px; font-weight:800;">Total Convert: <span id="scTotalPcs" style="color:#15803d;">${totalConvertPcs} Pcs</span></div>` : '<div></div>'}
           <button type="button" class="btn btn-success primary-save-btn" onclick="saveStockConvertBatch()">
-            ✅ Convert Stock & Print All Barcode Stickers (Ctrl+S)
+            ${isEdit ? '✅ Update Convert & Sync Stock (Ctrl+S)' : '✅ Save Convert & Print Dukan Barcode (Ctrl+S)'}
           </button>
         </div>
-      </div>
-    `;
+      </div>`;
 
-    renderStockConvertRows();
-    setTimeout(() => document.getElementById('scSourceSearch')?.focus(), 60);
+    if (isEdit) {
+      const match = bcSourceListCache.find((s) => s.value === oLog.sourceName);
+      document.getElementById('scSource').value = oLog.sourceName;
+      document.getElementById('scSourceSearch').value = match ? match.label : (oLog.sourceName === _BC_POOL ? 'JOB WORK WAPAS POOL' : oLog.sourceName);
+      document.getElementById('scSourceAvlHint').textContent = match ? `✓ Available (with edit): ${match.qty} Pcs` : '';
+      setTimeout(() => document.getElementById('scQty')?.focus(), 60);
+    } else {
+      renderStockConvertRows();
+      setTimeout(() => document.getElementById('scSourceSearch')?.focus(), 60);
+    }
     return;
   }
 
-  // === VIEW 4: MANUAL BARCODING FORM (Create + Edit Mode) ===
-  const isEdit = !!(bcState.editId && bcState.origLog);
-  const oLog = bcState.origLog;
+  // === VIEW 4: MANUAL BARCODING (CHALLAN KE TIME — SIRF CONVERTED STOCK AAYEGA!) ===
+  const rawConv = await dbGetAll('convertedStock');
+  const cMap = {};
+  rawConv.forEach((c) => { cMap[c.designName] = { qty: c.qty, specLine: c.specLine || '' }; });
+  if (isEdit && oLog.fromConverted) {
+    const cur = cMap[oLog.sourceName] || { qty: 0, specLine: oLog.specLine || '' };
+    cur.qty += (Number(oLog.qty) || 0);
+    cMap[oLog.sourceName] = cur;
+  }
+
+  bcSourceListCache = Object.keys(cMap)
+    .filter((k) => cMap[k].qty > 0)
+    .map((k) => ({ value: k, label: k, qty: cMap[k].qty, specLine: cMap[k].specLine }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
-        <h2>${isEdit ? '✏️ Edit Barcoding Entry' : '4. Barcoding (Manual Single Entry & Sticker Print)'}</h2>
+        <h2>${isEdit ? '✏️ Edit Challan Barcoding' : '🏷️ 2. Manual Barcoding (Challan ke Liye)'}</h2>
         ${isEdit ? `<button class="btn btn-light btn-sm" onclick="window.handleModuleEscape()">← Cancel Edit</button>` : ''}
       </div>
       ${getBarcodeTopNavHtml(designs.length)}
@@ -465,16 +463,18 @@ async function renderBarcodeModule() {
         ⚠️ Pehle <b>⚙️ Settings</b> me Firm Code (KT / IF) add karein!
       </div>` : ''}
 
+      ${!bcSourceListCache.length ? `<div style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e; padding:10px; border-radius:8px; margin-bottom:12px; font-size:12.5px; font-weight:700;">
+        ℹ️ Abhi Converted Stock khali hai — Pehle <b>"🔄 1. Stock Convert"</b> me jaakar Karigar saree ko Design me convert karein!
+      </div>` : ''}
+
       <div class="grid-2" style="align-items:start;">
         <div><label>Date</label><input type="date" id="bcDate" value="${isEdit ? esc(oLog.date) : todayISO()}" /></div>
-        ${buildSourcePickerHtml('bc', 'Kahan se Saree Leni Hai (Karigar Type Karein) *')}
+        ${buildSourcePickerHtml('bc', 'Converted Stock Chunein * (Type Karein)', '-- Pehle Stock Convert karein --')}
 
         <div>
-          <label>Design / Saree Name * (e.g. RASHMIKA, 1020)</label>
-          <input id="bcDesignName" list="bcDesignList" value="${isEdit ? esc(oLog.designName) : ''}" placeholder="e.g. RASHMIKA" oninput="onBCDesignInput()" />
-          <datalist id="bcDesignList">
-            ${designs.map((d) => `<option value="${esc(d.designName)}">`).join('')}
-          </datalist>
+          <label>Design / Saree Name *</label>
+          <input id="bcDesignName" list="bcDesignList" value="${isEdit ? esc(oLog.designName) : ''}" placeholder="e.g. 1070, RASHMIKA" oninput="onBCDesignInput()" />
+          <datalist id="bcDesignList">${designs.map((d) => `<option value="${esc(d.designName)}">`).join('')}</datalist>
         </div>
 
         <div>
@@ -491,7 +491,7 @@ async function renderBarcodeModule() {
 
         <div>
           <label>Quantity (Pcs & Stickers) *</label>
-          <input type="number" id="bcQty" min="1" value="${isEdit ? oLog.qty : ''}" placeholder="e.g. 20" />
+          <input type="number" id="bcQty" min="1" value="${isEdit ? oLog.qty : ''}" placeholder="e.g. 10" />
         </div>
 
         <div>
@@ -503,26 +503,25 @@ async function renderBarcodeModule() {
         </div>
 
         <div>
-          <label>Live Sticker Preview</label>
+          <label>Live Challan Sticker Preview</label>
           <div id="bcLivePreview" style="border:1px solid #9ca3af; border-radius:8px; padding:6px 10px; text-align:center; background:#fff;">
             <div style="font-size:10px; font-weight:700;" id="prevSpec">3.60 CM EMB JHALAR</div>
-            <div style="font-size:15px; font-weight:800; letter-spacing:0.5px;" id="prevDesign">RASHMIKA</div>
+            <div style="font-size:15px; font-weight:800; letter-spacing:0.5px;" id="prevDesign">1070</div>
             <svg id="prevBarcodeSvg" style="max-width:100%; height:30px;"></svg>
-            <div style="font-size:11px; font-weight:700;" id="prevBottom">RASHMIKA KT</div>
+            <div style="font-size:11px; font-weight:700;" id="prevBottom">1070 KT</div>
           </div>
         </div>
       </div>
 
       <button type="button" class="btn btn-success primary-save-btn" style="margin-top:14px; width:100%;" onclick="saveAndPrintBarcoding()">
-        ${isEdit ? '✅ Update Barcoding & Sync Stock (Ctrl+S)' : '🏷️ Save Stock Convert & Print Stickers (Ctrl+S)'}
+        ${isEdit ? '✅ Update Challan Barcoding & Sync Stock (Ctrl+S)' : '🏷️ Save Challan Ready Stock & Print Stickers (Ctrl+S)'}
       </button>
-    </div>
-  `;
+    </div>`;
 
   if (isEdit) {
     const match = bcSourceListCache.find((s) => s.value === oLog.sourceName);
     document.getElementById('bcSource').value = oLog.sourceName;
-    document.getElementById('bcSourceSearch').value = match ? match.label : (oLog.sourceName === _BC_POOL ? 'JOB WORK WAPAS POOL' : oLog.sourceName);
+    document.getElementById('bcSourceSearch').value = match ? match.label : oLog.sourceName;
     document.getElementById('bcSourceAvlHint').textContent = match ? `✓ Available (with edit): ${match.qty} Pcs` : '';
   }
 
@@ -532,20 +531,17 @@ async function renderBarcodeModule() {
   }, 80);
 }
 
-// === STOCK CONVERT HELPER FUNCTIONS ===
+// === STOCK CONVERT HELPERS ===
 async function onSCSourceChange() {
   const sourceName = document.getElementById('scSource')?.value || '';
   if (!sourceName) return;
-
   const src = await dbGet('bunkarStock', sourceName);
   const avail = src ? src.qty : 0;
-  const alreadyUsed = bcState.convertRows
-    .filter((r) => r.sourceName === sourceName)
-    .reduce((s, r) => s + r.qty, 0);
+  const alreadyUsed = bcState.editId ? 0 : bcState.convertRows.filter((r) => r.sourceName === sourceName).reduce((s, r) => s + r.qty, 0);
   const rem = Math.max(0, avail - alreadyUsed);
 
   const qtyEl = document.getElementById('scQty');
-  if (qtyEl && rem > 0) qtyEl.value = rem;
+  if (qtyEl && rem > 0 && !bcState.editId) qtyEl.value = rem;
 
   const map = getKarigarDesignMap();
   const mappedDesign = map[sourceName.toUpperCase()] || '';
@@ -560,9 +556,7 @@ async function onSCDesignInput() {
   const name = document.getElementById('scDesignName')?.value.trim().toUpperCase();
   const d = name ? await dbGet('designs', name) : null;
   const specEl = document.getElementById('scSpecLine');
-  if (d && d.specLine && specEl && !specEl.value.trim()) {
-    specEl.value = d.specLine;
-  }
+  if (d && d.specLine && specEl && !specEl.value.trim()) specEl.value = d.specLine;
 }
 
 async function addStockConvertRow() {
@@ -571,7 +565,6 @@ async function addStockConvertRow() {
   const desEl = document.getElementById('scDesignName');
   const qtyEl = document.getElementById('scQty');
   const specEl = document.getElementById('scSpecLine');
-  const firmCode = (document.getElementById('scFirmCode')?.value || '').trim().toUpperCase();
 
   let sourceName = srcHiddenEl ? srcHiddenEl.value : '';
   if (!sourceName && srcSearchEl && srcSearchEl.value.trim()) {
@@ -579,36 +572,27 @@ async function addStockConvertRow() {
     const hit = bcSourceListCache.find((s) => s.label.toUpperCase() === q || s.value.toUpperCase() === q);
     if (hit) sourceName = hit.value;
   }
-
   const designName = desEl.value.trim().toUpperCase();
   const qty = parseInt(qtyEl.value, 10);
   const specLine = specEl.value.trim().toUpperCase();
 
-  if (!sourceName) { srcSearchEl?.focus(); return alert('Pehle list me se Karigar / Source chunein!'); }
+  if (!sourceName) { srcSearchEl?.focus(); return alert('Pehle list me se Karigar chunein!'); }
   if (!designName) { desEl.focus(); return alert('Bikri / Design Name daalein (e.g. 1070)!'); }
-  if (!firmCode) return alert('Settings me Firm Code add karein!');
   if (!qty || qty <= 0) { qtyEl.focus(); return alert('Sahi Qty daalein!'); }
 
   const src = await dbGet('bunkarStock', sourceName);
   const avail = src ? src.qty : 0;
-  const alreadyUsed = bcState.convertRows
-    .filter((r) => r.sourceName === sourceName)
-    .reduce((s, r) => s + r.qty, 0);
+  const alreadyUsed = bcState.convertRows.filter((r) => r.sourceName === sourceName).reduce((s, r) => s + r.qty, 0);
+  if (alreadyUsed + qty > avail) return alert(`${sourceName} me sirf ${avail} Pcs bache hain!`);
 
-  if (alreadyUsed + qty > avail) {
-    return alert(`${sourceName === _BC_POOL ? 'Job Work Pool' : sourceName} me sirf ${avail} Pcs bache hain (pehle hi ${alreadyUsed} Pcs list me add hain)!`);
-  }
-
-  bcState.convertRows.push({ sourceName, designName, firmCode, specLine, qty });
+  bcState.convertRows.push({ sourceName, designName, firmCode: '', specLine, qty });
   saveKarigarDesignMap(sourceName, designName);
 
   if (srcHiddenEl) srcHiddenEl.value = '';
   if (srcSearchEl) srcSearchEl.value = '';
   const hintEl = document.getElementById('scSourceAvlHint');
   if (hintEl) hintEl.textContent = '';
-  desEl.value = '';
-  qtyEl.value = '';
-  specEl.value = '';
+  desEl.value = ''; qtyEl.value = ''; specEl.value = '';
   renderStockConvertRows();
   srcSearchEl?.focus();
 }
@@ -622,7 +606,6 @@ function renderStockConvertRows() {
   const tbody = document.getElementById('scRowsBody');
   const totalEl = document.getElementById('scTotalPcs');
   if (!tbody) return;
-
   let total = 0;
   tbody.innerHTML = bcState.convertRows.map((r, i) => {
     total += r.qty;
@@ -631,19 +614,57 @@ function renderStockConvertRows() {
         <td>${i + 1}</td>
         <td><b>${esc(r.sourceName === _BC_POOL ? 'JOB WORK POOL' : r.sourceName)}</b></td>
         <td>→</td>
-        <td><b>${esc(r.designName)} (${esc(r.firmCode)})</b></td>
+        <td><b>${esc(r.designName)}</b></td>
         <td><small>${esc(r.specLine || '-')}</small></td>
         <td><b style="color:#15803d;">${r.qty} Pcs</b></td>
         <td><button type="button" class="btn btn-danger btn-sm" onclick="removeStockConvertRow(${i})">X</button></td>
-      </tr>
-    `;
-  }).join('') || '<tr><td colspan="7" style="color:#6b7280;">Upar se Karigar aur Bikri Design daal kar "+ Add" karein...</td></tr>';
-
+      </tr>`;
+  }).join('') || '<tr><td colspan="7" style="color:#6b7280;">Upar se Karigar aur Design Name daal kar "+ Add" karein...</td></tr>';
   if (totalEl) totalEl.textContent = total + ' Pcs';
 }
 
 async function saveStockConvertBatch() {
   try {
+    const date = document.getElementById('scDate')?.value || todayISO();
+    const printMode = document.getElementById('scPrintMode')?.value || 'THERMAL';
+    const isEdit = !!(bcState.editId && bcState.origLog);
+
+    if (isEdit) {
+      const srcSearchEl = document.getElementById('scSourceSearch');
+      let sourceName = document.getElementById('scSource')?.value || '';
+      if (!sourceName && srcSearchEl && srcSearchEl.value.trim()) {
+        const q = srcSearchEl.value.trim().toUpperCase();
+        const hit = bcSourceListCache.find((s) => s.label.toUpperCase() === q || s.value.toUpperCase() === q);
+        if (hit) sourceName = hit.value;
+      }
+      const designName = document.getElementById('scDesignName').value.trim().toUpperCase();
+      const qty = parseInt(document.getElementById('scQty').value, 10);
+      const specLine = document.getElementById('scSpecLine').value.trim().toUpperCase();
+      if (!sourceName || !designName || !qty || qty <= 0) return alert('Sabhi zaroori details bharein!');
+
+      const src = await dbGet('bunkarStock', sourceName);
+      const extra = bcState.origLog.sourceName === sourceName ? (Number(bcState.origLog.qty) || 0) : 0;
+      const avail = (src ? src.qty : 0) + extra;
+      if (qty > avail) return alert(`${sourceName} me sirf ${avail} Pcs bache hain!`);
+
+      const exDes = await dbGet('designs', designName);
+      await dbPut('designs', { designName, specLine: specLine || (exDes ? exDes.specLine : ''), createdAt: exDes ? exDes.createdAt : Date.now() });
+      await dbPut('barcodingLogs', {
+        id: bcState.editId, date, mode: 'STOCK_CONVERT', sourceName, designName, firmCode: '',
+        specLine, barcodeVal: designName, qty, createdAt: bcState.origLog.createdAt
+      });
+      saveKarigarDesignMap(sourceName, designName);
+      if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
+      if (typeof refreshDashboard === 'function') await refreshDashboard();
+
+      if (confirm(`✅ ${designName} (${qty} Pcs) Update ho gaya!\nKya abhi Dukan Barcode Print karne hain?`)) {
+        await printBatchBarcodeStickers([{ specLine, designName, firmCode: '', qty }], printMode);
+      }
+      bcState.editId = null; bcState.origLog = null; bcState.view = 'HISTORY';
+      renderBarcodeModule();
+      return;
+    }
+
     if (!bcState.convertRows.length) {
       const desVal = document.getElementById('scDesignName')?.value.trim();
       const srcVal = document.getElementById('scSource')?.value || document.getElementById('scSourceSearch')?.value.trim();
@@ -651,35 +672,23 @@ async function saveStockConvertBatch() {
     }
     if (!bcState.convertRows.length) return alert('Convert List khali hai! Kam se kam 1 entry add karein.');
 
-    const date = document.getElementById('scDate')?.value || todayISO();
-    const printMode = document.getElementById('scPrintMode')?.value || 'THERMAL';
-
     const neededMap = {};
     bcState.convertRows.forEach((r) => { neededMap[r.sourceName] = (neededMap[r.sourceName] || 0) + r.qty; });
     for (const srcName of Object.keys(neededMap)) {
       const st = await dbGet('bunkarStock', srcName);
       const avail = st ? st.qty : 0;
-      if (neededMap[srcName] > avail) {
-        return alert(`${srcName} me sirf ${avail} Pcs bache hain, par aap ${neededMap[srcName]} Pcs convert kar rahe ho!`);
-      }
+      if (neededMap[srcName] > avail) return alert(`${srcName} me sirf ${avail} Pcs bache hain!`);
     }
 
     let totalQty = 0;
     const printItems = [];
     for (const r of bcState.convertRows) {
       const exDes = await dbGet('designs', r.designName);
-      await dbPut('designs', {
-        designName: r.designName,
-        specLine: r.specLine || (exDes ? exDes.specLine : ''),
-        createdAt: exDes ? exDes.createdAt : Date.now()
-      });
-
+      await dbPut('designs', { designName: r.designName, specLine: r.specLine || (exDes ? exDes.specLine : ''), createdAt: exDes ? exDes.createdAt : Date.now() });
       await dbPut('barcodingLogs', {
-        date, mode: 'STOCK_CONVERT', sourceName: r.sourceName,
-        designName: r.designName, firmCode: r.firmCode, specLine: r.specLine,
-        barcodeVal: `${r.designName} ${r.firmCode}`, qty: r.qty, createdAt: Date.now()
+        date, mode: 'STOCK_CONVERT', sourceName: r.sourceName, designName: r.designName, firmCode: '',
+        specLine: r.specLine, barcodeVal: r.designName, qty: r.qty, createdAt: Date.now()
       });
-
       saveKarigarDesignMap(r.sourceName, r.designName);
       totalQty += r.qty;
       printItems.push({ ...r });
@@ -689,7 +698,7 @@ async function saveStockConvertBatch() {
     bcState.convertRows = [];
     if (typeof refreshDashboard === 'function') await refreshDashboard();
 
-    if (confirm(`✅ Total ${totalQty} Pcs Ready Stock me convert ho gayi!\nKya abhi sabhi ${totalQty} Barcode Stickers ek saath Print karne hain?`)) {
+    if (confirm(`✅ ${totalQty} Pcs Dukan Design Stock me convert ho gayi! (Order Form me dikhegi)\nKya abhi sabhi ${totalQty} Dukan Barcode Stickers Print karne hain?`)) {
       await printBatchBarcodeStickers(printItems, printMode);
     }
     renderBarcodeModule();
@@ -702,18 +711,14 @@ async function printBatchBarcodeStickers(items, mode) {
 
   const isThermal = mode !== 'A4_GRID';
   let pageSt = document.getElementById('simplitexDynamicPageCSS');
-  if (!pageSt) {
-    pageSt = document.createElement('style');
-    pageSt.id = 'simplitexDynamicPageCSS';
-    document.head.appendChild(pageSt);
-  }
+  if (!pageSt) { pageSt = document.createElement('style'); pageSt.id = 'simplitexDynamicPageCSS'; document.head.appendChild(pageSt); }
   pageSt.textContent = isThermal
     ? `@media print { @page { size: 50mm 25mm; margin: 0; } body { margin: 0; } }`
     : `@media print { @page { size: A4; margin: 8mm; } }`;
 
   let labelsHtml = '';
   items.forEach((it) => {
-    const codeVal = `${it.designName} ${it.firmCode}`;
+    const codeVal = it.firmCode ? `${it.designName} ${it.firmCode}` : it.designName;
     for (let i = 0; i < it.qty; i++) {
       labelsHtml += `
         <div style="${isThermal
@@ -724,8 +729,7 @@ async function printBatchBarcodeStickers(items, mode) {
           <div style="font-size:13px; font-weight:900; line-height:1.1; margin:1px 0;">${esc(it.designName)}</div>
           <svg class="stx-bc-svg" data-bc-val="${esc(codeVal)}" style="width:92%; height:9mm; display:block; margin:1px auto;"></svg>
           <div style="font-size:9px; font-weight:800; line-height:1;">${esc(codeVal)}</div>
-        </div>
-      `;
+        </div>`;
     }
   });
 
@@ -734,14 +738,13 @@ async function printBatchBarcodeStickers(items, mode) {
 
   if (typeof window.JsBarcode === 'function') {
     root.querySelectorAll('.stx-bc-svg').forEach((svg) => {
-      const codeVal = svg.getAttribute('data-bc-val') || '';
-      window.JsBarcode(svg, codeVal, { format: 'CODE128', width: 1.4, height: 28, displayValue: false, margin: 0 });
+      window.JsBarcode(svg, svg.getAttribute('data-bc-val') || '', { format: 'CODE128', width: 1.4, height: 28, displayValue: false, margin: 0 });
     });
   }
   setTimeout(() => window.print(), 200);
 }
 
-// === MANUAL BARCODING FUNCTIONS ===
+// === MANUAL BARCODING (CHALLAN READY) HELPERS ===
 async function onBCDesignInput() {
   const name = document.getElementById('bcDesignName').value.trim().toUpperCase();
   const d = name ? await dbGet('designs', name) : null;
@@ -753,26 +756,19 @@ async function onBCDesignInput() {
 
 async function updateStickerPreview() {
   const spec = (document.getElementById('bcSpecLine')?.value || '3.60 CM EMB JHALAR').trim().toUpperCase();
-  const design = (document.getElementById('bcDesignName')?.value || 'RASHMIKA').trim().toUpperCase();
+  const design = (document.getElementById('bcDesignName')?.value || '1070').trim().toUpperCase();
   const firm = (document.getElementById('bcFirmCode')?.value || 'KT').trim().toUpperCase();
-  const codeVal = `${design} ${firm}`;
+  const codeVal = firm ? `${design} ${firm}` : design;
 
   const pSpec = document.getElementById('prevSpec');
   const pDes = document.getElementById('prevDesign');
   const pBot = document.getElementById('prevBottom');
   if (!pSpec) return;
 
-  pSpec.textContent = spec;
-  pDes.textContent = design;
-  pBot.textContent = codeVal;
-
+  pSpec.textContent = spec; pDes.textContent = design; pBot.textContent = codeVal;
   await ensureJsBarcodeLoaded();
   if (typeof window.JsBarcode === 'function') {
-    try {
-      window.JsBarcode('#prevBarcodeSvg', codeVal, {
-        format: 'CODE128', width: 1.5, height: 28, displayValue: false, margin: 0
-      });
-    } catch (_) {}
+    try { window.JsBarcode('#prevBarcodeSvg', codeVal, { format: 'CODE128', width: 1.5, height: 28, displayValue: false, margin: 0 }); } catch (_) {}
   }
 }
 
@@ -781,7 +777,7 @@ async function editBarcodingLog(id) {
   if (!l) return;
   bcState.editId = l.id;
   bcState.origLog = l;
-  bcState.view = 'FORM';
+  bcState.view = l.mode === 'STOCK_CONVERT' ? 'CONVERT' : 'FORM';
   renderBarcodeModule();
 }
 
@@ -802,28 +798,24 @@ async function saveAndPrintBarcoding() {
     const qty = parseInt(document.getElementById('bcQty').value, 10);
     const printMode = document.getElementById('bcPrintMode').value;
 
-    if (!sourceName) { srcSearchEl?.focus(); return alert('Pehle list me se Karigar / Source chunein!'); }
+    if (!sourceName) { srcSearchEl?.focus(); return alert('Pehle list me se Converted Design Stock chunein!'); }
     if (!designName) return alert('Design Name daalein!');
     if (!firmCode) return alert('Settings me Firm Code add karein!');
     if (!qty || qty <= 0) return alert('Sahi Quantity daalein!');
 
-    const src = await dbGet('bunkarStock', sourceName);
     const isEdit = !!(bcState.editId && bcState.origLog);
+    const useConv = isEdit ? !!bcState.origLog.fromConverted : true;
+    const src = useConv ? await dbGet('convertedStock', sourceName) : await dbGet('bunkarStock', sourceName);
     const editExtra = (isEdit && bcState.origLog.sourceName === sourceName) ? (Number(bcState.origLog.qty) || 0) : 0;
     const avail = (src ? src.qty : 0) + editExtra;
-    if (qty > avail) return alert(`Is source me sirf ${avail} Pcs bache hain!`);
+    if (qty > avail) return alert(`Converted Stock "${sourceName}" me sirf ${avail} Pcs bache hain!`);
 
     const exDes = await dbGet('designs', designName);
-    await dbPut('designs', {
-      designName,
-      specLine: specLine || (exDes ? exDes.specLine : ''),
-      createdAt: exDes ? exDes.createdAt : Date.now()
-    });
+    await dbPut('designs', { designName, specLine: specLine || (exDes ? exDes.specLine : ''), createdAt: exDes ? exDes.createdAt : Date.now() });
 
     const barcodeVal = `${designName} ${firmCode}`;
     const logPayload = {
-      date,
-      mode: isEdit ? (bcState.origLog.mode || 'MANUAL') : 'MANUAL',
+      date, mode: 'MANUAL', fromConverted: useConv,
       sourceName, designName, firmCode, specLine, barcodeVal, qty,
       createdAt: isEdit ? bcState.origLog.createdAt : Date.now()
     };
@@ -833,19 +825,18 @@ async function saveAndPrintBarcoding() {
     if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
 
-    if (confirm(`✅ ${qty} Pcs "${barcodeVal}" ${isEdit ? 'Update' : 'Save'} ho gayi!\nKya abhi ${qty} Stickers Print karne hain?`)) {
+    if (confirm(`✅ ${qty} Pcs "${barcodeVal}" Challan Ready Stock me ${isEdit ? 'Update' : 'Save'} ho gayi!\nKya abhi ${qty} Stickers Print karne hain?`)) {
       await printBarcodeStickers(specLine, designName, firmCode, qty, printMode);
     }
 
-    bcState.editId = null;
-    bcState.origLog = null;
+    bcState.editId = null; bcState.origLog = null;
     if (isEdit) bcState.view = 'HISTORY';
     renderBarcodeModule();
   } catch (err) { alert('Barcoding Error: ' + err.message); }
 }
 
 async function printBarcodeStickers(specLine, designName, firmCode, count, mode) {
-  return printBatchBarcodeStickers([{ specLine, designName, firmCode, qty: count }], mode);
+  return printBatchBarcodeStickers([{ specLine, designName, firmCode: firmCode || '', qty: count }], mode);
 }
 
 async function addNewDesignPrompt() {
@@ -867,9 +858,9 @@ async function editDesignSpec(designName) {
 
 async function quickReprintPrompt(designName, specLine) {
   const firms = await dbGetAll('firms');
-  const defaultCode = firms.length ? firms[0].shortCode : 'KT';
-  const firmCode = prompt('Firm Code likhein (e.g. KT ya IF):', defaultCode);
-  if (!firmCode) return;
+  const defaultCode = firms.length ? firms[0].shortCode : '';
+  const firmCode = prompt('Firm Code likhein (e.g. KT ya IF, ya khali chhodein Dukan sticker ke liye):', defaultCode);
+  if (firmCode === null) return;
   const qty = parseInt(prompt('Kitne Stickers print karne hain?', '10'), 10);
   if (!qty || qty <= 0) return;
   await printBarcodeStickers(specLine, designName, firmCode.trim().toUpperCase(), qty, 'THERMAL');
@@ -885,8 +876,7 @@ async function reverseBarcodingLog(id) {
   try {
     const l = await dbGet('barcodingLogs', id);
     if (!l) return;
-    if (!confirm(`Kya "${l.designName} ${l.firmCode}" (${l.qty} Pcs) ki Barcoding delete karke Stock dobara calculate karna hai?`)) return;
-
+    if (!confirm(`Kya "${l.designName} ${l.firmCode || ''}" (${l.qty} Pcs) delete karke Stock dobara calculate karna hai?`)) return;
     await dbDelete('barcodingLogs', id);
     if (typeof window.stxRecalculateAllStock === 'function') await window.stxRecalculateAllStock();
     if (typeof refreshDashboard === 'function') await refreshDashboard();
